@@ -1,10 +1,11 @@
 package printer
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/karimkheirat/simsim-pos-agent/internal/util"
 )
 
 // FilePrinter writes each print job to a file in dir, suffixed .escpos.
@@ -51,7 +52,7 @@ func (f *FilePrinter) IsReachable() bool {
 // fresh UUIDv4 is generated for the filename.
 func (f *FilePrinter) Print(jobName string, data []byte) error {
 	if jobName == "" {
-		uuid, err := newUUIDv4()
+		uuid, err := util.NewUUIDv4()
 		if err != nil {
 			return fmt.Errorf("generate job id: %w", err)
 		}
@@ -62,19 +63,6 @@ func (f *FilePrinter) Print(jobName string, data []byte) error {
 		return fmt.Errorf("write print job %q: %w", path, err)
 	}
 	return nil
-}
-
-// newUUIDv4 returns an RFC 4122 v4 UUID in canonical 8-4-4-4-12 form,
-// using crypto/rand for the entropy.
-func newUUIDv4() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0F) | 0x40 // version 4
-	b[8] = (b[8] & 0x3F) | 0x80 // variant 10xx
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // Compile-time assertion that *FilePrinter satisfies Printer.

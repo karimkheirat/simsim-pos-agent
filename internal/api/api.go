@@ -1,0 +1,145 @@
+// Package api implements the local HTTP server exposed on 127.0.0.1 to
+// the Simsim POS web app. See POS_AGENT_SPEC.md §5.3 and §5.4.
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
+)
+
+// Default Config values, exposed only in the New constructor's defaulting.
+const (
+	defaultIdempotencyTTL            = 24 * time.Hour
+	defaultIdempotencySweepInterval  = 5 * time.Minute
+	defaultShutdownTimeout           = 5 * time.Second
+)
+
+// Config carries the runtime parameters New needs to assemble a Server.
+type Config struct {
+	// ListenAddr is the bind address, always "127.0.0.1:<port>".
+	ListenAddr string
+
+	// AllowedOrigins is the CORS allowlist; requests with no Origin header
+	// (curl, agentctl) bypass the check entirely.
+	AllowedOrigins []string
+
+	// Version surfaces in the /health response.
+	Version string
+
+	// Logger is the slog handle used by middleware and handlers. Defaults
+	// to slog.Default() when nil.
+	Logger *slog.Logger
+
+	// IdempotencyTTL controls how long a /print response is replayable for
+	// a repeat job_id. Defaults to 24h. Exposed for tests.
+	IdempotencyTTL time.Duration
+
+	// IdempotencySweepInterval controls how often the janitor goroutine
+	// removes expired entries. Defaults to 5min. Exposed for tests.
+	IdempotencySweepInterval time.Duration
+}
+
+// Server holds the assembled HTTP handler chain and its dependencies.
+type Server struct {
+	cfg     Config
+	logger  *slog.Logger
+	printer printer.Printer
+	idem    *IdempotencyStore
+	handler http.Handler
+}
+
+// New builds a Server with all middleware wired and routes registered.
+// The returned *Server is ready to serve via Run or to mount on an
+// httptest.Server (via the unexported handler field; tests live in this
+// package).
+func New(cfg Config, p printer.Printer) (*Server, error) {
+	if cfg.ListenAddr == "" {
+		return nil, errors.New("api: ListenAddr is required")
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	if cfg.IdempotencyTTL == 0 {
+		cfg.IdempotencyTTL = defaultIdempotencyTTL
+	}
+	if cfg.IdempotencySweepInterval == 0 {
+		cfg.IdempotencySweepInterval = defaultIdempotencySweepInterval
+	}
+
+	s := &Server{
+		cfg:     cfg,
+		logger:  cfg.Logger,
+		printer: p,
+		idem:    NewIdempotencyStore(cfg.IdempotencyTTL),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /print", s.handlePrint)
+	mux.HandleFunc("POST /test-print", s.handleTestPrint)
+	mux.HandleFunc("POST /drawer/open", s.handleDrawerOpen)
+
+	// Outer → inner: recover, requestLog, checkLoopback, cors, mux.
+	s.handler = chain(mux,
+		s.recoverMiddleware,
+		s.requestLogMiddleware,
+		s.checkLoopbackMiddleware,
+		s.corsMiddleware,
+	)
+
+	return s, nil
+}
+
+// Run binds a TCP4 loopback listener, serves until ctx is canceled, then
+// initiates a graceful shutdown bounded by defaultShutdownTimeout.
+func (s *Server) Run(ctx context.Context) error {
+	listener, err := net.Listen("tcp4", s.cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("api: listen %q: %w", s.cfg.ListenAddr, err)
+	}
+
+	httpsrv := &http.Server{Handler: s.handler}
+
+	// Idempotency janitor — bound to the same ctx so it exits with Run.
+	go s.idem.RunJanitor(ctx, s.cfg.IdempotencySweepInterval)
+
+	serveErr := make(chan error, 1)
+	go func() {
+		err := httpsrv.Serve(listener)
+		if errors.Is(err, http.ErrServerClosed) {
+			serveErr <- nil
+		} else {
+			serveErr <- err
+		}
+	}()
+
+	s.logger.Info("api: listening", "addr", listener.Addr().String())
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+		defer cancel()
+		if err := httpsrv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("api: shutdown: %w", err)
+		}
+		<-serveErr // drain the Serve goroutine
+		return nil
+	case err := <-serveErr:
+		return err
+	}
+}
+
+// chain composes middlewares so that mws[0] is the outermost wrapper.
+func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
+	for i := len(mws) - 1; i >= 0; i-- {
+		h = mws[i](h)
+	}
+	return h
+}
