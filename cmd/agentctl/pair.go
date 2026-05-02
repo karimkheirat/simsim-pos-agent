@@ -13,6 +13,7 @@ import (
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/cloud"
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
+	"github.com/karimkheirat/simsim-pos-agent/internal/pairing"
 )
 
 // errMsgInvalidCode is the French error string surfaced when --code fails
@@ -61,30 +62,26 @@ func runPair(args []string) int {
 		return 1
 	}
 
-	client := cloud.New(cfg.CloudBaseURL, version)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	resp, err := client.Pair(ctx, *code, version, machineID)
-	if err != nil {
-		printPairError(err)
-		return 1
-	}
-
 	secStore, err := config.NewSecretStore(*secretsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Erreur: impossible de créer le store de secrets: %v\n", err)
 		return 1
 	}
 
-	if err := secStore.Save(&config.Secrets{
-		TerminalID:    resp.TerminalID,
-		TerminalToken: resp.TerminalToken,
-		StoreID:       resp.StoreID,
-		PairedAt:      time.Now().UTC(),
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Erreur: impossible de persister les secrets: %v\n", err)
+	client := cloud.New(cfg.CloudBaseURL, version)
+	svc := &pairing.Service{
+		Cloud:     client,
+		Secrets:   secStore,
+		MachineID: machineID,
+		Version:   version,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := svc.Pair(ctx, *code)
+	if err != nil {
+		printPairError(err)
 		return 1
 	}
 
@@ -93,8 +90,10 @@ func runPair(args []string) int {
 	fmt.Printf("  Caisse     : %s\n", resp.TerminalLabel)
 	fmt.Printf("  ID terminal: %s\n", resp.TerminalID)
 
-	// One-shot heartbeat — best effort. Lets the cloud's last-seen flip
-	// green within seconds instead of waiting for the service's 5min cycle.
+	// Bootstrap one-shot heartbeat — best effort, intentionally CLI-layer
+	// (not part of pairing.Service.Pair) per the A4 contract. Lets the
+	// cloud's last-seen flip green within seconds instead of waiting for
+	// the running service's 5min cycle.
 	hbCtx, hbCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer hbCancel()
 	if hbErr := client.Heartbeat(hbCtx, resp.TerminalToken, buildHeartbeat(cfg)); hbErr != nil {

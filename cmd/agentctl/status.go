@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
+	"github.com/karimkheirat/simsim-pos-agent/internal/pairing"
 )
 
 func runStatus(args []string) int {
@@ -29,20 +30,27 @@ func runStatus(args []string) int {
 		return 1
 	}
 
-	secrets, err := secStore.Load()
-	if errors.Is(err, config.ErrNoSecrets) {
-		fmt.Println("Non jumelé.")
-		return 0
-	}
+	// Status only reads local secrets — no cloud client needed.
+	svc := &pairing.Service{Secrets: secStore}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	st, err := svc.Status(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Erreur: %v\n", err)
 		return 1
 	}
 
+	if !st.Paired {
+		fmt.Println("Non jumelé.")
+		return 0
+	}
+
 	fmt.Println("✓ Jumelé.")
-	fmt.Printf("  ID terminal: %s\n", secrets.TerminalID)
-	fmt.Printf("  ID magasin : %s\n", secrets.StoreID)
-	fmt.Printf("  Jumelé le  : %s\n", secrets.PairedAt.Local().Format("2006-01-02 15:04:05 MST"))
+	fmt.Printf("  ID terminal: %s\n", st.TerminalID)
+	fmt.Printf("  ID magasin : %s\n", st.StoreID)
+	fmt.Printf("  Jumelé le  : %s\n", st.PairedAt.Local().Format("2006-01-02 15:04:05 MST"))
 
 	// Best-effort poll of the local agent's /health to surface printer
 	// state. M3 will add a /status endpoint with richer detail.
@@ -79,3 +87,4 @@ func runStatus(args []string) int {
 		health.Printer.Name, health.Printer.Configured, health.Printer.Reachable)
 	return 0
 }
+
