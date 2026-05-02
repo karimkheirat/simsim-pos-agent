@@ -1,0 +1,28 @@
+# Build output
+/build/
+/dist/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/vendor/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# Claude Code local state (user-specific)
+/.claude/
+
+# Local-only settings
+*.local.json
+
+# OS junk
+Thumbs.db
+.DS_Store
