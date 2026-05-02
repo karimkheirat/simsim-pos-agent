@@ -1,0 +1,146 @@
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func TestDefaults(t *testing.T) {
+	c := Defaults()
+	if c.Version != "0.1.0" {
+		t.Errorf("Version = %q, want 0.1.0", c.Version)
+	}
+	if c.ListenPort != 47291 {
+		t.Errorf("ListenPort = %d, want 47291", c.ListenPort)
+	}
+	if c.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want info", c.LogLevel)
+	}
+	if c.PrinterName != "" {
+		t.Errorf("PrinterName = %q, want empty", c.PrinterName)
+	}
+	if len(c.AllowedOrigins) != 2 {
+		t.Errorf("AllowedOrigins len = %d, want 2", len(c.AllowedOrigins))
+	}
+}
+
+func TestLoad_MissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "does-not-exist.json")
+	cfg, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrConfigMissing) {
+		t.Errorf("err = %v; want errors.Is(err, ErrConfigMissing)", err)
+	}
+	if cfg.ListenPort != 47291 {
+		t.Errorf("Defaults() not returned on missing file: ListenPort = %d", cfg.ListenPort)
+	}
+}
+
+func TestLoad_MalformedJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(path, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrConfigMalformed) {
+		t.Errorf("err = %v; want errors.Is(err, ErrConfigMalformed)", err)
+	}
+	if cfg.ListenPort != 47291 {
+		t.Errorf("Defaults() not returned on malformed JSON: ListenPort = %d", cfg.ListenPort)
+	}
+}
+
+func TestLoad_UnknownField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unknown.json")
+	if err := os.WriteFile(path, []byte(`{"listen_port": 8080, "mystery_field": true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+	if !errors.Is(err, ErrConfigMalformed) {
+		t.Errorf("err = %v; want errors.Is(err, ErrConfigMalformed)", err)
+	}
+}
+
+func TestLoad_PartialOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.json")
+	// Only listen_port is overridden; other fields keep defaults.
+	if err := os.WriteFile(path, []byte(`{"listen_port": 9000}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ListenPort != 9000 {
+		t.Errorf("ListenPort = %d, want 9000", cfg.ListenPort)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want info (default)", cfg.LogLevel)
+	}
+	if cfg.Version != "0.1.0" {
+		t.Errorf("Version = %q, want 0.1.0 (default)", cfg.Version)
+	}
+	if len(cfg.AllowedOrigins) != 2 {
+		t.Errorf("AllowedOrigins len = %d, want 2 (default)", len(cfg.AllowedOrigins))
+	}
+}
+
+func TestValidate_Success(t *testing.T) {
+	if err := Validate(Defaults()); err != nil {
+		t.Errorf("Validate(Defaults()) = %v, want nil", err)
+	}
+}
+
+func TestValidate_InvalidFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{"empty version", func(c *Config) { c.Version = "" }, "version"},
+		{"port zero", func(c *Config) { c.ListenPort = 0 }, "listen_port"},
+		{"port negative", func(c *Config) { c.ListenPort = -1 }, "listen_port"},
+		{"port too high", func(c *Config) { c.ListenPort = 70000 }, "listen_port"},
+		{"bad log level", func(c *Config) { c.LogLevel = "verbose" }, "log_level"},
+		{"empty log level", func(c *Config) { c.LogLevel = "" }, "log_level"},
+		{"empty origin in list", func(c *Config) { c.AllowedOrigins = []string{"https://ok.example", ""} }, "allowed_origins"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Defaults()
+			tt.mutate(&c)
+			err := Validate(c)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %q; want substring %q", err.Error(), tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultConfigPath(t *testing.T) {
+	got := DefaultConfigPath()
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(got, "Simsim") || !strings.HasSuffix(got, "config.json") {
+			t.Errorf("windows DefaultConfigPath = %q, want containing Simsim and ending config.json", got)
+		}
+	} else {
+		if got != "./config.json" {
+			t.Errorf("non-windows DefaultConfigPath = %q, want ./config.json", got)
+		}
+	}
+}
