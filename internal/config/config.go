@@ -15,8 +15,13 @@ import (
 // (Windows) or ./config.json (other). All fields are optional; missing
 // fields fall back to Defaults().
 type Config struct {
-	Version        string   `json:"version"`
-	ListenPort     int      `json:"listen_port"`
+	Version    string `json:"version"`
+	ListenPort int    `json:"listen_port"`
+
+	// CloudBaseURL is the base for /api/pos-agent/* calls. Added in M2
+	// for pair/heartbeat/unpair; M1 had no cloud-side dependencies.
+	CloudBaseURL string `json:"cloud_base_url"`
+
 	PrinterName    string   `json:"printer_name"`
 	LogLevel       string   `json:"log_level"`
 	AllowedOrigins []string `json:"allowed_origins"`
@@ -33,10 +38,11 @@ var (
 // Defaults returns the M1 defaults from the spec.
 func Defaults() Config {
 	return Config{
-		Version:     "0.1.0",
-		ListenPort:  47291,
-		PrinterName: "",
-		LogLevel:    "info",
+		Version:      "0.1.0",
+		ListenPort:   47291,
+		CloudBaseURL: "https://web-production-6bb4d.up.railway.app",
+		PrinterName:  "",
+		LogLevel:     "info",
 		AllowedOrigins: []string{
 			"https://web-production-6bb4d.up.railway.app",
 			"https://opensimsim.co",
@@ -114,6 +120,17 @@ func DefaultSecretsPath() string {
 		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "secrets.dat")
 	}
 	return "./secrets.json"
+}
+
+// DefaultMachineIDPath returns the OS-appropriate cache path for the
+// machine_id token computed by agentctl. Cached across runs so the
+// pairing identifier the cloud sees is stable. Added in M2 for the
+// pairing flow; M1 had no machine-identity concept.
+func DefaultMachineIDPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "machine_id")
+	}
+	return "./machine_id"
 }
 
 // programDataDir returns %ProgramData% with a sensible fallback. Only

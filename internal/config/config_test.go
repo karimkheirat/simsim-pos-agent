@@ -23,8 +23,24 @@ func TestDefaults(t *testing.T) {
 	if c.PrinterName != "" {
 		t.Errorf("PrinterName = %q, want empty", c.PrinterName)
 	}
+	if c.CloudBaseURL != "https://web-production-6bb4d.up.railway.app" {
+		t.Errorf("CloudBaseURL = %q, want railway prod URL", c.CloudBaseURL)
+	}
 	if len(c.AllowedOrigins) != 2 {
 		t.Errorf("AllowedOrigins len = %d, want 2", len(c.AllowedOrigins))
+	}
+}
+
+func TestDefaultMachineIDPath(t *testing.T) {
+	got := DefaultMachineIDPath()
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(got, "Simsim") || !strings.HasSuffix(got, "machine_id") {
+			t.Errorf("windows DefaultMachineIDPath = %q, want containing Simsim and ending machine_id", got)
+		}
+	} else {
+		if got != "./machine_id" {
+			t.Errorf("non-windows DefaultMachineIDPath = %q, want ./machine_id", got)
+		}
 	}
 }
 
