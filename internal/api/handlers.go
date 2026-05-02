@@ -2,21 +2,25 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 	"github.com/karimkheirat/simsim-pos-agent/internal/receipt"
 	"github.com/karimkheirat/simsim-pos-agent/internal/util"
 )
 
-// healthResponse mirrors POS_AGENT_SPEC.md §5.3. paired/store_id/terminal_id
-// are M2; in M1 paired is hardcoded false and the binding fields are omitted.
+// healthResponse mirrors POS_AGENT_SPEC.md §5.3. M2 (sub-task A5) wired
+// the real paired/store_id/terminal_id from the secret store.
 type healthResponse struct {
-	OK      bool          `json:"ok"`
-	Version string        `json:"version"`
-	Paired  bool          `json:"paired"`
-	Printer printerHealth `json:"printer"`
+	OK         bool          `json:"ok"`
+	Version    string        `json:"version"`
+	Paired     bool          `json:"paired"`
+	StoreID    string        `json:"store_id,omitempty"`
+	TerminalID string        `json:"terminal_id,omitempty"`
+	Printer    printerHealth `json:"printer"`
 }
 
 type printerHealth struct {
@@ -26,14 +30,78 @@ type printerHealth struct {
 }
 
 // handleHealth — flat response per spec §5.3 (not the standard envelope).
+// Unauthenticated; the POS web app uses it to discover the agent and
+// verify the bound terminal_id matches the cashier's session before
+// sending /print requests.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := healthResponse{
 		OK:      true,
 		Version: s.cfg.Version,
-		Paired:  false, // M1: hardcoded
 		Printer: s.printerHealth(),
 	}
+	if s.secrets != nil {
+		// Load failures (file IO, decryption error) are reported as
+		// paired:false in the response (no secret-store detail leaks to
+		// the wire) but are logged at warn level here so an operator
+		// pulling agent.log on a pilot machine sees the cause directly,
+		// rather than just "agent says unpaired." /health is loopback-only
+		// so the leak concern is informational, not security.
+		secrets, err := s.secrets.Load()
+		switch {
+		case err == nil:
+			resp.Paired = true
+			resp.StoreID = secrets.StoreID
+			resp.TerminalID = secrets.TerminalID
+		case errors.Is(err, config.ErrNoSecrets):
+			// Genuinely unpaired — no warning, just paired:false.
+		default:
+			s.logger.Warn("/health: secret store load failed; reporting unpaired",
+				"err", err.Error())
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// statusResponse extends the /health shape with auth-gated diagnostic
+// fields. Returned only when the caller has a valid X-Terminal-Token,
+// so we can include details that /health withholds.
+type statusResponse struct {
+	OK          bool          `json:"ok"`
+	Version     string        `json:"version"`
+	Paired      bool          `json:"paired"`
+	StoreID     string        `json:"store_id"`
+	TerminalID  string        `json:"terminal_id"`
+	Printer     printerHealth `json:"printer"`
+	LastPrintAt *time.Time    `json:"last_print_at"`
+}
+
+// handleStatus is the authenticated diagnostic endpoint. requireTerminalToken
+// has already verified pairing + token, so secrets are guaranteed loadable
+// here. M3 will extend with queue depths from the outbox.
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	secrets, err := s.secrets.Load()
+	if err != nil {
+		// Would only happen if the store flipped between middleware and
+		// handler — surface as INTERNAL.
+		s.logger.Error("handleStatus: secret store load failed", "err", err.Error())
+		writeError(w, http.StatusInternalServerError, CodeInternal, "Erreur d'accès aux secrets.")
+		return
+	}
+
+	var lastPrintAt *time.Time
+	if t, ok := s.idem.LastSuccessAt(); ok {
+		lastPrintAt = &t
+	}
+
+	writeJSON(w, http.StatusOK, statusResponse{
+		OK:          true,
+		Version:     s.cfg.Version,
+		Paired:      true,
+		StoreID:     secrets.StoreID,
+		TerminalID:  secrets.TerminalID,
+		Printer:     s.printerHealth(),
+		LastPrintAt: lastPrintAt,
+	})
 }
 
 func (s *Server) printerHealth() printerHealth {
@@ -62,11 +130,8 @@ type printResponseData struct {
 }
 
 // handlePrint renders a Receipt and submits it to the printer with
-// idempotency keyed on job_id.
-//
-// TODO M2: token auth — wrap this handler with auth middleware that
-// requires X-Terminal-Token matching the stored terminal token before
-// calling through to the body below.
+// idempotency keyed on job_id. Auth is enforced by requireTerminalToken,
+// wired in api.go's mux registration.
 func (s *Server) handlePrint(w http.ResponseWriter, r *http.Request) {
 	var req printRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

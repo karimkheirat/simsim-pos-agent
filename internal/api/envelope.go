@@ -8,14 +8,14 @@ import (
 // Error codes returned in the response envelope. Defined as constants so
 // callers (POS web app, agentctl) can switch on them.
 const (
-	CodeUnauthenticated      = "UNAUTHENTICATED"      // unused in M1
-	CodeNotPaired            = "NOT_PAIRED"           // unused in M1
+	CodeUnauthenticated      = "UNAUTHENTICATED"
+	CodeNotPaired            = "NOT_PAIRED"
 	CodePrinterNotConfigured = "PRINTER_NOT_CONFIGURED"
 	CodePrinterOffline       = "PRINTER_OFFLINE"
 	CodePrintFailed          = "PRINT_FAILED"
 	CodeDrawerFailed         = "DRAWER_FAILED"
 	CodeInvalidReceipt       = "INVALID_RECEIPT"
-	CodeRateLimited          = "RATE_LIMITED" // unused in M1
+	CodeRateLimited          = "RATE_LIMITED" // unused until M3 rate-limit work
 	CodeInternal             = "INTERNAL"
 )
 

@@ -1,10 +1,56 @@
 package api
 
 import (
+	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 )
+
+// French operator-facing messages for auth failures. The agent's local
+// API speaks French because operators read the resulting POS web app
+// errors directly.
+const (
+	errMsgNotPaired       = "Agent non jumelé. Exécutez 'agentctl pair'."
+	errMsgUnauthenticated = "Token invalide ou manquant."
+)
+
+// requireTerminalToken gates a handler on (1) the agent being paired
+// (secrets present), and (2) the request carrying an X-Terminal-Token
+// header that constant-time-equals the stored token.
+//
+// Constant-time compare via crypto/subtle is critical: a naive == compare
+// leaks token bytes via timing on a long-lived listener. ConstantTimeCompare
+// short-circuits on length mismatch — for our fixed-length tokens that's
+// fine; in any case missing/wrong-length tokens fail through the same
+// 401 UNAUTHENTICATED path.
+func (s *Server) requireTerminalToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.secrets == nil {
+			writeError(w, http.StatusUnauthorized, CodeNotPaired, errMsgNotPaired)
+			return
+		}
+		secrets, err := s.secrets.Load()
+		if errors.Is(err, config.ErrNoSecrets) {
+			writeError(w, http.StatusUnauthorized, CodeNotPaired, errMsgNotPaired)
+			return
+		}
+		if err != nil {
+			s.logger.Error("requireTerminalToken: secret store load failed", "err", err.Error())
+			writeError(w, http.StatusInternalServerError, CodeInternal, "Erreur d'accès aux secrets.")
+			return
+		}
+		provided := r.Header.Get("X-Terminal-Token")
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(secrets.TerminalToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, CodeUnauthenticated, errMsgUnauthenticated)
+			return
+		}
+		next(w, r)
+	}
+}
 
 // recoverMiddleware catches panics from any downstream handler, logs them,
 // and replies with the INTERNAL error envelope.

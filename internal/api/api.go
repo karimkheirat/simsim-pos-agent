@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 )
 
@@ -37,6 +38,11 @@ type Config struct {
 	// to slog.Default() when nil.
 	Logger *slog.Logger
 
+	// Secrets is the agent's pairing secret store, consulted by the
+	// requireTerminalToken middleware. nil → all auth-protected endpoints
+	// reject with NOT_PAIRED. Added in M2 (sub-task A5).
+	Secrets config.SecretStore
+
 	// IdempotencyTTL controls how long a /print response is replayable for
 	// a repeat job_id. Defaults to 24h. Exposed for tests.
 	IdempotencyTTL time.Duration
@@ -51,6 +57,7 @@ type Server struct {
 	cfg     Config
 	logger  *slog.Logger
 	printer printer.Printer
+	secrets config.SecretStore
 	idem    *IdempotencyStore
 	handler http.Handler
 }
@@ -77,14 +84,19 @@ func New(cfg Config, p printer.Printer) (*Server, error) {
 		cfg:     cfg,
 		logger:  cfg.Logger,
 		printer: p,
+		secrets: cfg.Secrets,
 		idem:    NewIdempotencyStore(cfg.IdempotencyTTL),
 	}
 
 	mux := http.NewServeMux()
+	// /health is intentionally unauthenticated — POS web app uses it to
+	// discover the local agent and verify the bound terminal_id matches
+	// the cashier's current session before sending any /print request.
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("POST /print", s.handlePrint)
-	mux.HandleFunc("POST /test-print", s.handleTestPrint)
-	mux.HandleFunc("POST /drawer/open", s.handleDrawerOpen)
+	mux.HandleFunc("POST /print", s.requireTerminalToken(s.handlePrint))
+	mux.HandleFunc("POST /test-print", s.requireTerminalToken(s.handleTestPrint))
+	mux.HandleFunc("POST /drawer/open", s.requireTerminalToken(s.handleDrawerOpen))
+	mux.HandleFunc("GET /status", s.requireTerminalToken(s.handleStatus))
 
 	// Outer → inner: recover, requestLog, checkLoopback, cors, mux.
 	s.handler = chain(mux,

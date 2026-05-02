@@ -18,10 +18,11 @@ type Result struct {
 // past their ExpiresAt are filtered on Get and physically removed by the
 // janitor goroutine started via RunJanitor.
 type IdempotencyStore struct {
-	mu  sync.RWMutex
-	m   map[string]Result
-	ttl time.Duration
-	now func() time.Time // injectable for tests
+	mu            sync.RWMutex
+	m             map[string]Result
+	ttl           time.Duration
+	now           func() time.Time // injectable for tests
+	lastSuccessAt time.Time        // wall-clock time of the most recent Set; zero if none
 }
 
 // NewIdempotencyStore returns a store with the given entry TTL.
@@ -47,12 +48,29 @@ func (s *IdempotencyStore) Get(jobID string) (Result, bool) {
 	return r, true
 }
 
-// Set stores r under jobID, stamping ExpiresAt = now + ttl.
+// Set stores r under jobID, stamping ExpiresAt = now + ttl. Also bumps
+// lastSuccessAt — every Set is invoked from the /print success path and
+// is therefore a confirmed successful print.
 func (s *IdempotencyStore) Set(jobID string, r Result) {
-	r.ExpiresAt = s.now().Add(s.ttl)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
+	r.ExpiresAt = now.Add(s.ttl)
 	s.m[jobID] = r
+	s.lastSuccessAt = now
+}
+
+// LastSuccessAt returns the time of the most recent Set, plus a presence
+// bool. Returns (zero, false) when no successful print has been recorded
+// since the store was created. The value persists past entry expiry —
+// sweep removes cache entries but keeps the historical max for /status.
+func (s *IdempotencyStore) LastSuccessAt() (time.Time, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastSuccessAt.IsZero() {
+		return time.Time{}, false
+	}
+	return s.lastSuccessAt, true
 }
 
 // RunJanitor sweeps expired entries every interval until ctx is canceled.
