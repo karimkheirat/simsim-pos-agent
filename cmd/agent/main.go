@@ -16,11 +16,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	ksvc "github.com/kardianos/service"
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/api"
+	"github.com/karimkheirat/simsim-pos-agent/internal/cloud"
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
+	"github.com/karimkheirat/simsim-pos-agent/internal/heartbeat"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 	svcpkg "github.com/karimkheirat/simsim-pos-agent/internal/service"
 )
@@ -39,10 +42,11 @@ Usage:
   agent service status
 
 Flags (run):
-  --config string      Path to config.json
-  --printer string     Override printer spec (e.g. "SP-331" or "file:./out")
-  --port int           Override listen port (default 47291)
-  --log-level string   debug | info | warn | error
+  --config string             Path to config.json
+  --printer string            Override printer spec (e.g. "SP-331" or "file:./out")
+  --port int                  Override listen port (default 47291)
+  --log-level string          debug | info | warn | error
+  --heartbeat-seconds int     Override heartbeat cadence (default 300)
 `
 
 func main() {
@@ -80,16 +84,17 @@ func printUsage() {
 func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	var (
-		configPath  = fs.String("config", config.DefaultConfigPath(), "Path to config.json")
-		printerSpec = fs.String("printer", "", `Override printer spec ("SP-331" or "file:./out")`)
-		port        = fs.Int("port", 0, "Override listen port (0 = use config)")
-		logLevel    = fs.String("log-level", "", "Override log_level (debug|info|warn|error)")
+		configPath       = fs.String("config", config.DefaultConfigPath(), "Path to config.json")
+		printerSpec      = fs.String("printer", "", `Override printer spec ("SP-331" or "file:./out")`)
+		port             = fs.Int("port", 0, "Override listen port (0 = use config)")
+		logLevel         = fs.String("log-level", "", "Override log_level (debug|info|warn|error)")
+		heartbeatSeconds = fs.Int("heartbeat-seconds", 0, "Override heartbeat cadence (0 = use config)")
 	)
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	cfg, loadErr := loadAndOverride(*configPath, *printerSpec, *port, *logLevel)
+	cfg, loadErr := loadAndOverride(*configPath, *printerSpec, *port, *logLevel, *heartbeatSeconds)
 	if loadErr != nil && !errors.Is(loadErr, config.ErrConfigMissing) {
 		fmt.Fprintf(os.Stderr, "%v\n", loadErr)
 		os.Exit(2)
@@ -125,9 +130,9 @@ func runCmd(args []string) {
 	}
 	defer mutex.Release()
 
-	srv, err := buildServer(cfg, logger)
+	rt, err := buildRuntime(cfg, logger)
 	if err != nil {
-		logger.Error("server init failed", "err", err.Error())
+		logger.Error("runtime init failed", "err", err.Error())
 		os.Exit(1)
 	}
 
@@ -141,10 +146,22 @@ func runCmd(args []string) {
 		cancel()
 	}()
 
-	if err := srv.Run(ctx); err != nil {
+	// Start the heartbeat loop alongside the server, sharing ctx.
+	heartbeatDone := make(chan struct{})
+	if rt.Heartbeat != nil {
+		go func() {
+			rt.Heartbeat.Run(ctx)
+			close(heartbeatDone)
+		}()
+	} else {
+		close(heartbeatDone)
+	}
+
+	if err := rt.Server.Run(ctx); err != nil {
 		logger.Error("server stopped with error", "err", err.Error())
 		os.Exit(1)
 	}
+	<-heartbeatDone
 	logger.Info("server stopped")
 }
 
@@ -152,7 +169,7 @@ func runCmd(args []string) {
 // (SCM doesn't capture stdout), wires secrets, hands lifecycle to
 // kardianos via svc.Run() which blocks until SCM stops the service.
 func runAsService() {
-	cfg, loadErr := loadAndOverride(config.DefaultConfigPath(), "", 0, "")
+	cfg, loadErr := loadAndOverride(config.DefaultConfigPath(), "", 0, "", 0)
 	if loadErr != nil && !errors.Is(loadErr, config.ErrConfigMissing) {
 		// No place to log this except the system event log via kardianos
 		// later; for now exit non-zero so SCM marks the start as failed.
@@ -189,13 +206,17 @@ func runAsService() {
 	}
 	defer mutex.Release()
 
-	srv, err := buildServer(cfg, logger)
+	rt, err := buildRuntime(cfg, logger)
 	if err != nil {
-		logger.Error("server init failed", "err", err.Error())
+		logger.Error("runtime init failed", "err", err.Error())
 		os.Exit(1)
 	}
 
-	prg := &svcpkg.Program{Server: srv, Logger: logger}
+	prg := &svcpkg.Program{
+		Server:    rt.Server,
+		Logger:    logger,
+		Heartbeat: rt.Heartbeat,
+	}
 	svc, err := ksvc.New(prg, svcpkg.BuildConfig())
 	if err != nil {
 		logger.Error("service.New failed", "err", err.Error())
@@ -265,11 +286,11 @@ func serviceCmd(args []string) {
 	}
 }
 
-// loadAndOverride loads config.json from configPath and applies the four
-// CLI overrides. Always sets Version from the build-time variable.
-// Returns the loaded Config plus the original Load error so the caller
-// can distinguish missing-file from validation problems.
-func loadAndOverride(configPath, printerSpec string, port int, logLevel string) (config.Config, error) {
+// loadAndOverride loads config.json from configPath and applies CLI
+// overrides. Always sets Version from the build-time variable. Returns
+// the loaded Config plus the original Load error so the caller can
+// distinguish missing-file from validation problems.
+func loadAndOverride(configPath, printerSpec string, port int, logLevel string, heartbeatSeconds int) (config.Config, error) {
 	cfg, loadErr := config.Load(configPath)
 	if printerSpec != "" {
 		cfg.PrinterName = printerSpec
@@ -280,14 +301,28 @@ func loadAndOverride(configPath, printerSpec string, port int, logLevel string) 
 	if logLevel != "" {
 		cfg.LogLevel = logLevel
 	}
+	if heartbeatSeconds != 0 {
+		cfg.HeartbeatSeconds = heartbeatSeconds
+	}
 	cfg.Version = version
 	return cfg, loadErr
 }
 
-// buildServer constructs api.Server with both the printer transport and
-// the secret store wired in. Used by both the foreground and service
+// agentRuntime bundles the long-lived runtime objects shared by the
+// foreground and service run paths.
+type agentRuntime struct {
+	Server    *api.Server
+	Heartbeat *heartbeat.Loop // nil if cloud_base_url is empty
+}
+
+// buildRuntime constructs the api.Server (with printer + secrets wired
+// in) and the heartbeat loop. Used by both the foreground and service
 // run paths so they're guaranteed identical in capabilities.
-func buildServer(cfg config.Config, logger *slog.Logger) (*api.Server, error) {
+//
+// Secrets non-nil invariant: config.NewSecretStore returns a non-nil
+// store on success. The api.Config.Secrets field receives that store —
+// no nil-secrets path through this function.
+func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error) {
 	var p printer.Printer
 	if cfg.PrinterName != "" {
 		var err error
@@ -304,13 +339,35 @@ func buildServer(cfg config.Config, logger *slog.Logger) (*api.Server, error) {
 		return nil, fmt.Errorf("secrets: %w", err)
 	}
 
-	return api.New(api.Config{
+	srv, err := api.New(api.Config{
 		ListenAddr:     "127.0.0.1:" + strconv.Itoa(cfg.ListenPort),
 		AllowedOrigins: cfg.AllowedOrigins,
 		Version:        cfg.Version,
 		Logger:         logger,
 		Secrets:        secStore,
 	}, p)
+	if err != nil {
+		return nil, err
+	}
+
+	rt := &agentRuntime{Server: srv}
+
+	// Heartbeat loop — skip if no cloud configured (e.g. dev/CI agent
+	// with cloud_base_url cleared in config.json).
+	if cfg.CloudBaseURL != "" {
+		rt.Heartbeat = &heartbeat.Loop{
+			Cloud:    cloud.New(cfg.CloudBaseURL, cfg.Version),
+			Secrets:  secStore,
+			Printer:  p,
+			Logger:   logger,
+			Version:  cfg.Version,
+			Interval: time.Duration(cfg.HeartbeatSeconds) * time.Second,
+		}
+	} else {
+		logger.Warn("cloud_base_url empty; heartbeat loop disabled")
+	}
+
+	return rt, nil
 }
 
 // openServiceLog opens (creating dirs as needed) the service-mode log

@@ -26,6 +26,9 @@ func TestDefaults(t *testing.T) {
 	if c.CloudBaseURL != "https://web-production-6bb4d.up.railway.app" {
 		t.Errorf("CloudBaseURL = %q, want railway prod URL", c.CloudBaseURL)
 	}
+	if c.HeartbeatSeconds != 300 {
+		t.Errorf("HeartbeatSeconds = %d, want 300", c.HeartbeatSeconds)
+	}
 	if len(c.AllowedOrigins) != 2 {
 		t.Errorf("AllowedOrigins len = %d, want 2", len(c.AllowedOrigins))
 	}
@@ -132,6 +135,8 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"bad log level", func(c *Config) { c.LogLevel = "verbose" }, "log_level"},
 		{"empty log level", func(c *Config) { c.LogLevel = "" }, "log_level"},
 		{"empty origin in list", func(c *Config) { c.AllowedOrigins = []string{"https://ok.example", ""} }, "allowed_origins"},
+		{"heartbeat_seconds zero", func(c *Config) { c.HeartbeatSeconds = 0 }, "heartbeat_seconds"},
+		{"heartbeat_seconds negative", func(c *Config) { c.HeartbeatSeconds = -5 }, "heartbeat_seconds"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

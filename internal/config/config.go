@@ -22,6 +22,10 @@ type Config struct {
 	// for pair/heartbeat/unpair; M1 had no cloud-side dependencies.
 	CloudBaseURL string `json:"cloud_base_url"`
 
+	// HeartbeatSeconds is the interval (seconds) between cloud
+	// heartbeats. Default 300 (5min). Added in M2 (sub-task A7).
+	HeartbeatSeconds int `json:"heartbeat_seconds"`
+
 	PrinterName    string   `json:"printer_name"`
 	LogLevel       string   `json:"log_level"`
 	AllowedOrigins []string `json:"allowed_origins"`
@@ -38,11 +42,12 @@ var (
 // Defaults returns the M1 defaults from the spec.
 func Defaults() Config {
 	return Config{
-		Version:      "0.1.0",
-		ListenPort:   47291,
-		CloudBaseURL: "https://web-production-6bb4d.up.railway.app",
-		PrinterName:  "",
-		LogLevel:     "info",
+		Version:          "0.1.0",
+		ListenPort:       47291,
+		CloudBaseURL:     "https://web-production-6bb4d.up.railway.app",
+		HeartbeatSeconds: 300,
+		PrinterName:      "",
+		LogLevel:         "info",
 		AllowedOrigins: []string{
 			"https://web-production-6bb4d.up.railway.app",
 			"https://opensimsim.co",
@@ -88,6 +93,9 @@ func Validate(c Config) error {
 	}
 	if c.ListenPort < 1 || c.ListenPort > 65535 {
 		return fmt.Errorf("config: listen_port %d out of range (1..65535)", c.ListenPort)
+	}
+	if c.HeartbeatSeconds <= 0 {
+		return fmt.Errorf("config: heartbeat_seconds %d must be > 0", c.HeartbeatSeconds)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

@@ -29,6 +29,7 @@ import (
 	ksvc "github.com/kardianos/service"
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/api"
+	"github.com/karimkheirat/simsim-pos-agent/internal/heartbeat"
 )
 
 // ServiceName is the SCM identifier — referenced by sc.exe and by the
@@ -52,33 +53,50 @@ func BuildConfig() *ksvc.Config {
 	}
 }
 
-// Program implements ksvc.Interface. Hands the api.Server lifecycle
-// to the SCM: Start kicks off Run in a goroutine, Stop cancels its
-// context and waits up to 10s for graceful shutdown.
+// Program implements ksvc.Interface. Hands the api.Server + heartbeat
+// loop lifecycle to the SCM: Start kicks off both in goroutines sharing
+// one context, Stop cancels and waits up to 10s for graceful shutdown.
 type Program struct {
 	Server *api.Server
 	Logger *slog.Logger
+	// Heartbeat is optional. nil → no cloud heartbeats (e.g. when the
+	// agent is misconfigured with no CloudBaseURL). The api server still
+	// runs.
+	Heartbeat *heartbeat.Loop
 
-	cancel context.CancelFunc
-	done   chan error
+	cancel        context.CancelFunc
+	serverDone    chan error
+	heartbeatDone chan struct{}
 }
 
 // Start is invoked by the SCM (or by service.Run in foreground service
-// dispatch). MUST NOT block — the actual server work runs in a goroutine.
+// dispatch). MUST NOT block — both the server and the heartbeat loop
+// run in goroutines.
 func (p *Program) Start(_ ksvc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
-	p.done = make(chan error, 1)
+	p.serverDone = make(chan error, 1)
 	go func() {
 		err := p.Server.Run(ctx)
-		p.done <- err
+		p.serverDone <- err
 	}()
-	p.Logger.Info("service started", "service_name", ServiceName)
+
+	if p.Heartbeat != nil {
+		p.heartbeatDone = make(chan struct{})
+		go func() {
+			p.Heartbeat.Run(ctx)
+			close(p.heartbeatDone)
+		}()
+	}
+
+	p.Logger.Info("service started",
+		"service_name", ServiceName,
+		"heartbeat_enabled", p.Heartbeat != nil)
 	return nil
 }
 
-// Stop is invoked by the SCM. Cancels the server context and blocks up
-// to 10s waiting for graceful shutdown.
+// Stop is invoked by the SCM. Cancels the shared context and blocks up
+// to 10s waiting for graceful shutdown of both goroutines.
 func (p *Program) Stop(_ ksvc.Service) error {
 	p.Logger.Info("service stopping", "service_name", ServiceName)
 	if p.cancel == nil {
@@ -86,14 +104,21 @@ func (p *Program) Stop(_ ksvc.Service) error {
 	}
 	p.cancel()
 	select {
-	case err := <-p.done:
+	case err := <-p.serverDone:
 		if err != nil {
 			p.Logger.Error("service: server returned error on shutdown", "err", err.Error())
 		}
-		return nil
 	case <-time.After(10 * time.Second):
 		return errors.New("service: server did not exit within 10s of stop")
 	}
+	if p.heartbeatDone != nil {
+		select {
+		case <-p.heartbeatDone:
+		case <-time.After(2 * time.Second):
+			return errors.New("service: heartbeat loop did not exit within 2s of stop")
+		}
+	}
+	return nil
 }
 
 // Install registers the service with the OS service manager and applies
