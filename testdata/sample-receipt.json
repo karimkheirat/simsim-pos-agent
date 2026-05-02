@@ -1,0 +1,52 @@
+{
+  "job_id": "smoke-001",
+  "idempotency_key": "smoke-001",
+  "open_drawer_after": false,
+  "receipt": {
+    "store": {
+      "name": "Hamoud Boualem - Centre Oran",
+      "address_line_1": "12 Rue Larbi Ben M'hidi",
+      "address_line_2": "Oran 31000",
+      "phone": "+213 41 ...",
+      "tax_id": "NIF/RC line if applicable"
+    },
+    "terminal": {
+      "id": "trm_...",
+      "label": "Caisse 1"
+    },
+    "cashier": {
+      "name": "Amine Benali"
+    },
+    "receipt_number": "2026-0428-0001",
+    "issued_at": "2026-04-28T14:32:11+01:00",
+    "currency": "DZD",
+    "lines": [
+      {
+        "sku": "HB-COLA-33",
+        "name": "Hamoud Cola 33cl",
+        "qty": 6,
+        "unit_price": 45,
+        "line_total": 270,
+        "discount_label": null
+      }
+    ],
+    "discounts": [
+      { "label": "Remise -5%", "amount": -13.50 }
+    ],
+    "totals": {
+      "subtotal": 270,
+      "discount_total": -13.50,
+      "tax_total": 0,
+      "grand_total": 256.50
+    },
+    "payment": {
+      "method": "cash",
+      "tendered": 300,
+      "change": 43.50
+    },
+    "footer_lines": [
+      "Merci de votre visite",
+      "Conservez ce ticket"
+    ]
+  }
+}
