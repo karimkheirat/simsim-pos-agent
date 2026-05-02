@@ -101,11 +101,26 @@ func Validate(c Config) error {
 // %ProgramData% is unset). Elsewhere, ./config.json.
 func DefaultConfigPath() string {
 	if runtime.GOOS == "windows" {
-		programData := os.Getenv("ProgramData")
-		if programData == "" {
-			programData = `C:\ProgramData`
-		}
-		return filepath.Join(programData, "Simsim", "POSAgent", "config.json")
+		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "config.json")
 	}
 	return "./config.json"
+}
+
+// DefaultSecretsPath returns the OS-appropriate secrets file path. On
+// Windows, %ProgramData%\Simsim\POSAgent\secrets.dat (DPAPI ciphertext).
+// Elsewhere, ./secrets.json (plaintext, dev-only).
+func DefaultSecretsPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "secrets.dat")
+	}
+	return "./secrets.json"
+}
+
+// programDataDir returns %ProgramData% with a sensible fallback. Only
+// meaningful on Windows; callers gate via runtime.GOOS.
+func programDataDir() string {
+	if v := os.Getenv("ProgramData"); v != "" {
+		return v
+	}
+	return `C:\ProgramData`
 }
