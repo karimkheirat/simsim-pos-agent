@@ -71,6 +71,25 @@ func TestDoubleSize(t *testing.T) {
 	}
 }
 
+func TestDoubleHeight(t *testing.T) {
+	tests := []struct {
+		name string
+		on   bool
+		want []byte
+	}{
+		{"on", true, []byte{0x1D, 0x21, 0x01}},
+		{"off", false, []byte{0x1D, 0x21, 0x00}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := DoubleHeight(tt.on)
+			if !bytes.Equal(got, tt.want) {
+				t.Errorf("DoubleHeight(%v) = % X, want % X", tt.on, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAlign(t *testing.T) {
 	tests := []struct {
 		name string

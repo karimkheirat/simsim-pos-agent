@@ -54,6 +54,16 @@ func DoubleSize(on bool) []byte {
 	return []byte{0x1D, 0x21, n}
 }
 
+// DoubleHeight returns GS ! n with the height bit only (1D 21 01 / 00).
+// on=true emits 2x height, normal width; on=false emits normal size.
+func DoubleHeight(on bool) []byte {
+	var n byte
+	if on {
+		n = 0x01
+	}
+	return []byte{0x1D, 0x21, n}
+}
+
 // Align returns ESC a n — justification (1B 61 n) for n in {0, 1, 2}.
 func Align(a Alignment) []byte {
 	return []byte{0x1B, 0x61, byte(a)}
@@ -104,6 +114,12 @@ func (b *Builder) Text(s string) *Builder {
 	return b.Write([]byte(s))
 }
 
+// TextCP858 transcodes s from UTF-8 to CP858 and appends the result.
+// Equivalent to b.Write(ToCP858(s)).
+func (b *Builder) TextCP858(s string) *Builder {
+	return b.Write(ToCP858(s))
+}
+
 // Init appends ESC @.
 func (b *Builder) Init() *Builder {
 	b.buf = append(b.buf, Init()...)
@@ -125,6 +141,12 @@ func (b *Builder) Bold(on bool) *Builder {
 // DoubleSize appends GS ! n.
 func (b *Builder) DoubleSize(on bool) *Builder {
 	b.buf = append(b.buf, DoubleSize(on)...)
+	return b
+}
+
+// DoubleHeight appends GS ! 01 / 00.
+func (b *Builder) DoubleHeight(on bool) *Builder {
+	b.buf = append(b.buf, DoubleHeight(on)...)
 	return b
 }
 
