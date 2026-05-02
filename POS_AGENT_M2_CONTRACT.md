@@ -8,6 +8,19 @@ If either session needs to deviate from this contract, **stop and surface the qu
 
 ---
 
+## Amendment 1 (post-recon, before C1)
+
+Cloud-session recon against the live `simsim` schema surfaced four discrepancies. These resolutions apply across the contract:
+
+1. **Model name.** This contract refers to the conceptual entity as `Terminal`. The actual Prisma model in `simsim` is `PosTerminal` (table `pos_terminals`). Cloud-side code uses `PosTerminal` / `pos_terminals` everywhere. Agent-facing wire field names (`terminal_id`, `terminal_token`, `terminal_label`) are unchanged.
+2. **Heartbeat writes a new column, not the existing `last_seen_at`.** The existing `pos_terminals.last_seen_at` is bumped by POS web app authenticated requests (Spec 4 §6.1) and reflects POS web tab liveness. The agent heartbeat writes to a **new** column `agent_last_seen_at`. The two life-signs stay distinguishable. The C7 status pill reads `agent_last_seen_at`, not `last_seen_at`. The agent-side wire payload does not change — this is purely a cloud-side storage decision.
+3. **FK column types use plain `String` (no `@db.Uuid`).** The contract's §6 SQL writes `UUID` for the new tables' FK columns; in practice they must match existing `simsim` PKs which are `String @default(uuid())` (stored as TEXT). The new tables' FK columns are `String` in Prisma; the SQL types are `TEXT`. Migrating existing PKs to `UUID` is out of scope for M2.
+4. **No new column-type annotations.** The new schema additions use plain `DateTime` (no `@db.Timestamptz()`) and plain `String` for IPs (no `@db.Inet`), matching existing `simsim` convention. Migrating the schema to richer Postgres types is out of scope for M2.
+
+These resolutions take precedence over the original wording in §6 below.
+
+---
+
 ## 1. Base URLs
 
 - **Production:** `https://web-production-6bb4d.up.railway.app`
@@ -159,7 +172,7 @@ The `terminal_token` is shown only here. The agent must persist it immediately.
 - `401 UNAUTHENTICATED` — token missing, invalid, or revoked.
 - `400 INVALID_REQUEST` — malformed payload.
 
-**Side effects:** updates `terminal.last_seen_at = now()`, `terminal.agent_version`, `terminal.printer_status_json`.
+**Side effects:** updates `pos_terminals.agent_last_seen_at = now()`, `pos_terminals.agent_version`, `pos_terminals.printer_status_json`. Does NOT touch `pos_terminals.last_seen_at` (which is reserved for POS web app liveness per Spec 4 §6.1).
 
 ---
 
@@ -215,20 +228,22 @@ The agent maps these onto its own internal error taxonomy (`internal/cloud/error
 
 ## 6. Database schema additions (cloud-side)
 
-Three new tables, two columns on the existing `Terminal` table.
+Three new tables, three new columns on the existing `pos_terminals` table.
+
+Per Amendment 1: model is `PosTerminal`; FK columns are `TEXT` (Prisma `String`) to match existing PKs; no `@db.Timestamptz` / `@db.Inet` annotations; heartbeat writes `agent_last_seen_at`, not `last_seen_at`.
 
 ```sql
 -- 6.1 New table: pairing codes
 CREATE TABLE pos_agent_pairing_codes (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  terminal_id     UUID NOT NULL REFERENCES terminals(id) ON DELETE CASCADE,
-  store_id        UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-  code_hash       BYTEA NOT NULL,                 -- sha256(plaintext)
-  expires_at      TIMESTAMPTZ NOT NULL,
-  consumed_at     TIMESTAMPTZ,
-  consumed_by_ip  INET,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_by      UUID NOT NULL REFERENCES users(id)
+  id              TEXT PRIMARY KEY,                                                  -- uuid generated app-side
+  terminal_id     TEXT NOT NULL REFERENCES pos_terminals(id) ON DELETE CASCADE,
+  store_id        TEXT NOT NULL REFERENCES stores(id)        ON DELETE CASCADE,
+  code_hash       BYTEA NOT NULL,                                                    -- sha256(plaintext)
+  expires_at      TIMESTAMP NOT NULL,
+  consumed_at     TIMESTAMP,
+  consumed_by_ip  TEXT,
+  created_at      TIMESTAMP NOT NULL DEFAULT now(),
+  created_by      TEXT NOT NULL REFERENCES users(id)
 );
 
 CREATE INDEX idx_pos_agent_pairing_codes_terminal_active
@@ -237,14 +252,14 @@ CREATE INDEX idx_pos_agent_pairing_codes_terminal_active
 
 -- 6.2 New table: terminal tokens
 CREATE TABLE pos_agent_terminal_tokens (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  terminal_id     UUID NOT NULL REFERENCES terminals(id) ON DELETE CASCADE,
-  store_id        UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
-  token_hash      BYTEA NOT NULL UNIQUE,         -- sha256(token bytes)
+  id              TEXT PRIMARY KEY,                                                  -- uuid generated app-side
+  terminal_id     TEXT NOT NULL REFERENCES pos_terminals(id) ON DELETE CASCADE,
+  store_id        TEXT NOT NULL REFERENCES stores(id)        ON DELETE CASCADE,
+  token_hash      BYTEA NOT NULL UNIQUE,                                             -- sha256(token bytes)
   agent_version   TEXT,
   machine_id      TEXT,
-  paired_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  revoked_at      TIMESTAMPTZ
+  paired_at       TIMESTAMP NOT NULL DEFAULT now(),
+  revoked_at      TIMESTAMP
 );
 
 CREATE INDEX idx_pos_agent_terminal_tokens_active
@@ -254,19 +269,20 @@ CREATE INDEX idx_pos_agent_terminal_tokens_active
 -- 6.3 New table: pairing attempt log (for rate limiting + audit)
 CREATE TABLE pos_agent_pairing_attempts (
   id           BIGSERIAL PRIMARY KEY,
-  ip           INET NOT NULL,
-  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ip           TEXT NOT NULL,
+  attempted_at TIMESTAMP NOT NULL DEFAULT now(),
   outcome      TEXT NOT NULL                     -- 'success' | 'invalid_code' | 'rate_limited'
 );
 
 CREATE INDEX idx_pos_agent_pairing_attempts_ip_time
   ON pos_agent_pairing_attempts (ip, attempted_at DESC);
 
--- 6.4 Columns added to existing Terminal table
-ALTER TABLE terminals
+-- 6.4 Columns added to existing pos_terminals table
+-- Note: last_seen_at already exists (Spec 4) and is NOT touched here.
+ALTER TABLE pos_terminals
   ADD COLUMN agent_version       TEXT,
-  ADD COLUMN last_seen_at        TIMESTAMPTZ,
-  ADD COLUMN last_paired_at      TIMESTAMPTZ,
+  ADD COLUMN agent_last_seen_at  TIMESTAMP,
+  ADD COLUMN last_paired_at      TIMESTAMP,
   ADD COLUMN printer_status_json JSONB;
 ```
 
