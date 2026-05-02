@@ -133,6 +133,19 @@ func DefaultMachineIDPath() string {
 	return "./machine_id"
 }
 
+// DefaultLogPath returns the OS-appropriate path for the agent's structured
+// log file. Used in Windows service mode where stdout is discarded by SCM.
+// Added in M2 (sub-task A6).
+//
+// TODO M3: callers should wrap output via gopkg.in/natefinch/lumberjack.v2
+// — currently the file is opened with O_APPEND and grows unbounded.
+func DefaultLogPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "logs", "agent.log")
+	}
+	return "./agent.log"
+}
+
 // programDataDir returns %ProgramData% with a sensible fallback. Only
 // meaningful on Windows; callers gate via runtime.GOOS.
 func programDataDir() string {
