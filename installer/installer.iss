@@ -259,16 +259,19 @@ begin
     // array parameter triggers a Type Mismatch in PascalScript Unicode
     // (RemObjects PascalScript #129). v0.3.0/v0.3.1 used the variable
     // pattern and crashed here.
-    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'),
-                         [PairedTerminalLabel, PairedStoreName]);
+    //
+    // The [...] literal MUST stay on the same line as FmtMessage(. A
+    // continuation line that starts with '[' is read by Inno's
+    // preprocessor as an INI section header and fails compile with
+    // "Invalid section tag" (this is what broke v0.3.2's CI build).
+    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'), [PairedTerminalLabel, PairedStoreName]);
     Exit;
   end;
   if PairFailureReason = '' then
     Reason := ExpandConstant('{cm:PairFailureReasonUnknown}')
   else
     Reason := PairFailureReason;
-  Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPairFailed}'),
-                       [Reason, SelectedPairingCode]);
+  Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPairFailed}'), [Reason, SelectedPairingCode]);
 end;
 
 // --- Wizard lifecycle hooks ---
