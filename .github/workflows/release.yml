@@ -1,0 +1,146 @@
+# Release pipeline. Two trigger modes:
+#   - Push of a v*.*.* tag: full pipeline. Builds, compiles installer,
+#     optionally signs, creates GitHub Release with installer attached.
+#   - workflow_dispatch (manual run from the Actions tab): build + compile
+#     only. No release. Useful for verifying the pipeline without burning
+#     a version number.
+#
+# Code signing is wired but optional: if the CODE_SIGNING_CERT_BASE64
+# and CODE_SIGNING_PASSWORD secrets are present, signtool runs against
+# the installer; otherwise a "skipped" notice is logged. M4 ships
+# unsigned per spec §2 — operator clicks through the SmartScreen
+# warning ("This app is unrecognized") at install time.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 0.3.0). Used only for manual runs.'
+        required: true
+        default: '0.0.0-manual'
+
+permissions:
+  contents: write   # required to create the release
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      # Extract a clean version string from either the tag (push) or the
+      # workflow_dispatch input. Used as -ldflags injection AND as the
+      # /DAppVersion=... define for iscc, AND as the installer filename
+      # suffix (matches OutputBaseFilename in installer.iss).
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      # Cross-compile is a no-op here (windows-latest runner already
+      # produces windows/amd64 PE32+ binaries natively) — GOOS/GOARCH
+      # set explicitly for documentation + parity with local builds.
+      - name: Build binaries
+        shell: bash
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          go build -ldflags "-X main.Version=${{ steps.version.outputs.version }}" -o build/agent.exe ./cmd/agent
+          go build -ldflags "-X main.Version=${{ steps.version.outputs.version }}" -o build/agentctl.exe ./cmd/agentctl
+          ls -l build/
+
+      # Chocolatey is pre-installed on windows-latest. innosetup package
+      # lays iscc.exe at C:\Program Files (x86)\Inno Setup 6\ — same
+      # path as a manual desktop install, so the next step's iscc
+      # invocation matches the local-dev compile command.
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress --yes
+
+      # Use the full iscc path (don't rely on chocolatey's PATH
+      # propagation across step boundaries). MSYS_NO_PATHCONV is the
+      # local-dev workaround for Git Bash mangling /D switches into
+      # paths; on the windows-latest runner Git Bash behaves the same
+      # way, so the same env var is needed.
+      - name: Compile installer
+        shell: bash
+        env:
+          MSYS_NO_PATHCONV: '1'
+        run: |
+          "/c/Program Files (x86)/Inno Setup 6/iscc.exe" /Q installer/installer.iss /DAppVersion=${{ steps.version.outputs.version }}
+          ls -l build/installer/
+
+      # Code signing — only runs if the secret is present. Pattern:
+      # map the secret to env on the step so the `if:` check can read
+      # it (secrets are not directly visible in `if:` expressions).
+      - name: Sign installer
+        shell: bash
+        env:
+          CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.CODE_SIGNING_PASSWORD }}
+        if: env.CERT_BASE64 != ''
+        run: |
+          CERT_PATH="$RUNNER_TEMP/codesign.pfx"
+          echo "$CERT_BASE64" | base64 -d > "$CERT_PATH"
+          # signtool.exe is on PATH via the Windows SDK pre-installed
+          # on the GitHub-hosted windows-latest image.
+          # Timestamp authority RFC 3161; SHA-256 for both digest + cert.
+          signtool.exe sign \
+            /f "$CERT_PATH" \
+            /p "$CERT_PASSWORD" \
+            /tr http://timestamp.digicert.com \
+            /td sha256 \
+            /fd sha256 \
+            "build/installer/simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe"
+          rm "$CERT_PATH"
+
+      - name: Note signing skipped
+        shell: bash
+        env:
+          CERT_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
+        if: env.CERT_BASE64 == ''
+        run: |
+          echo "Code signing skipped — CODE_SIGNING_CERT_BASE64 secret not configured."
+          echo "Operators will see a SmartScreen 'unrecognized app' warning at install time."
+          echo "This is the M4 expected state per spec §2."
+
+      # Release creation only on tag push. workflow_dispatch runs are
+      # build-verification only — they don't produce a release because
+      # there's no tag to attach to.
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Simsim POS Agent ${{ github.ref_name }}
+          body: |
+            Windows installer for the Simsim POS Agent ${{ github.ref_name }}.
+
+            ## Install
+            Download `simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe` from the assets below and double-click. Requires admin (UAC prompt). Installs as a Windows service.
+
+            ## Changes
+            See commit history for changes since the previous release.
+          files: build/installer/simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe
+          draft: false
+          make_latest: true
