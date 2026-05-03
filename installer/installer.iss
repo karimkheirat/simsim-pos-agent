@@ -65,16 +65,34 @@ Source: "..\build\agent.exe";    DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\build\agentctl.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 [Run]
-; Post-install: register and start the Windows service. waituntilterminated
-; so we know each step finished before the next one starts. runhidden
-; keeps the spawned cmd window invisible to the operator.
+; Post-install sequence (AG5):
+;   1. write-config: seed config.json with AG3 printer choice + cloud URL.
+;   2. service install: register the Windows service.
+;   3. service start: bring the service up.
 ;
-; Exit code branching + retry / failure messaging lands in AG5. For now
-; these declarations are the wiring; failure surfaces only as Inno's
-; default "could not run" dialog.
+; All three are blocking — failure on any of them surfaces Inno's stock
+; "Could not run" dialog with Retry / Cancel. Cancel triggers rollback
+; (Inno auto-removes the files it copied). This is intentional: a
+; broken service install is not a usable install.
+;
+; The pair step (AG4 code) is NOT here — it lives in CurStepChanged
+; (ssPostInstall) below so we can warn-and-continue on pair failure
+; rather than rolling back. See M4 spec §3.7 (partial-install case).
+
+; Step 1: write config.json. {code:GetPrinterArg} substitutes the
+; AG3-selected printer name (or empty string if no printer detected);
+; empty-string semantics: write-config preserves any existing value.
+Filename: "{app}\bin\agent.exe"; \
+  Parameters: "write-config --printer ""{code:GetPrinterArg}"" --cloud-base-url ""{code:GetCloudBaseURLArg}"""; \
+  StatusMsg: "{cm:RunStatusWriteConfig}"; \
+  Flags: runhidden waituntilterminated
+
+; Step 2: register the service.
 Filename: "{app}\bin\agent.exe"; Parameters: "service install"; \
   StatusMsg: "{cm:RunStatusServiceInstall}"; \
   Flags: runhidden waituntilterminated
+
+; Step 3: start it.
 Filename: "{app}\bin\agent.exe"; Parameters: "service start"; \
   StatusMsg: "{cm:RunStatusServiceStart}"; \
   Flags: runhidden waituntilterminated
@@ -105,6 +123,154 @@ Name: "{group}\Désinstaller Simsim POS Agent"; Filename: "{uninstallexe}"
 #include "printer-picker.iss"
 #include "pair-code-page.iss"
 
+// AG5: globals capturing the pair step's result for the success page.
+// PairResultCode = 0  -> pair succeeded; PairedStoreName/TerminalLabel
+//                       are populated from agentctl's stdout.
+// PairResultCode <> 0 -> pair failed; PairFailureReason holds the
+//                       cloud's French error message (parsed from the
+//                       "Erreur: ..." line in agentctl's stderr-merged
+//                       output). Empty if parsing failed.
+// SkipPairing  -> the operator deferred pairing; the other vars are
+//                 ignored on the success page.
+var
+  PairResultCode:      Integer;
+  PairedStoreName:     String;
+  PairedTerminalLabel: String;
+  PairFailureReason:   String;
+
+// --- {code:...} substitution helpers for [Run] parameters ---
+
+// GetPrinterArg returns the AG3 printer choice for write-config. May be
+// empty — write-config's --printer "" path leaves printer_name unchanged.
+function GetPrinterArg(Param: String): String;
+begin
+  Result := SelectedPrinterName;
+end;
+
+// GetCloudBaseURLArg returns the production cloud base URL. Hardcoded
+// here for now; matches config.Defaults().CloudBaseURL in Go-land.
+// If the URL ever moves to a #define, swap this for {#CloudBaseURL}.
+function GetCloudBaseURLArg(Param: String): String;
+begin
+  Result := 'https://web-production-6bb4d.up.railway.app';
+end;
+
+// --- Wizard lifecycle ---
+//
+// Forward order matters: Pascal needs functions defined before they're
+// called. buildSuccessMessage and runPairStep appear above the lifecycle
+// hooks (InitializeWizard / CurPageChanged / NextButtonClick / CurStepChanged)
+// that reference them.
+
+// runPairStep execs `agentctl pair --code XXXXXX`, captures stdout to
+// {tmp}\pair.txt, and parses the M2 success-block format to extract
+// the cloud-supplied store name and terminal label for the success
+// page. Failures are recorded (not raised) — the installer continues.
+//
+// Stdout format (from cmd/agentctl/pair.go M2):
+//   "✓ Appareil jumelé avec succès."
+//   "  Magasin    : <store_name>"
+//   "  Caisse     : <terminal_label>"
+//   "  ID terminal: <terminal_id>"
+// Brittle: if those French labels change, parsing falls back to empty
+// strings and the success page degrades to "(unknown) is connected."
+// Future hardening: add `agentctl pair --output-json` and parse JSON.
+procedure runPairStep;
+var
+  TmpFile, Cmd, L: String;
+  ResultCode, i, p: Integer;
+  Lines: TArrayOfString;
+begin
+  TmpFile := ExpandConstant('{tmp}\pair.txt');
+  // cmd /C ""<exe>" pair --code XXXXXX > tmpfile 2>&1"
+  // Doubled outer quotes per cmd's argument-parsing rules when the
+  // command itself contains a quoted path.
+  Cmd := '/C ""' + ExpandConstant('{app}\bin\agentctl.exe') +
+         '" pair --code ' + SelectedPairingCode +
+         ' > "' + TmpFile + '" 2>&1"';
+
+  WizardForm.StatusLabel.Caption := ExpandConstant('{cm:RunStatusPair}');
+
+  if not Exec(ExpandConstant('{cmd}'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    PairResultCode := -1;
+    Exit;
+  end;
+  PairResultCode := ResultCode;
+  if not FileExists(TmpFile) then
+    Exit;
+  if not LoadStringsFromFile(TmpFile, Lines) then
+    Exit;
+
+  // On success, parse "Magasin :" and "Caisse :" lines for the success
+  // page. On failure, parse the "Erreur: <french-message>" line that
+  // cmd/agentctl/pair.go's printPairError emits — that's the cloud's
+  // own French message, surfaced through *CloudError.Message().
+  for i := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    L := Lines[i];
+    if (ResultCode = 0) and (Pos('Magasin', L) > 0) then
+    begin
+      p := Pos(':', L);
+      if p > 0 then
+        PairedStoreName := Trim(Copy(L, p + 1, Length(L) - p));
+    end
+    else if (ResultCode = 0) and (Pos('Caisse', L) > 0) then
+    begin
+      p := Pos(':', L);
+      if p > 0 then
+        PairedTerminalLabel := Trim(Copy(L, p + 1, Length(L) - p));
+    end
+    else if (ResultCode <> 0) and (Pos('Erreur:', L) > 0) then
+    begin
+      p := Pos(':', L);
+      if p > 0 then
+        PairFailureReason := Trim(Copy(L, p + 1, Length(L) - p));
+    end;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // ssPostInstall fires after [Files] copy + [Run] entries complete.
+  // The three [Run] entries (write-config, service install/start) have
+  // already run; if any of them failed, Inno would have rolled back
+  // and we wouldn't reach here. Now we run the conditional pair step.
+  if (CurStep = ssPostInstall) and not SkipPairing then
+    runPairStep;
+end;
+
+// buildSuccessMessage chooses the wpFinished label text based on whether
+// the operator skipped pairing, the pair succeeded, or it failed. Format
+// %1/%2 placeholders feed Inno's localized %Format substitution.
+function buildSuccessMessage: String;
+var
+  Args: array of String;
+begin
+  if SkipPairing then
+  begin
+    Result := ExpandConstant('{cm:InstallSuccessSkipped}');
+    Exit;
+  end;
+  if PairResultCode = 0 then
+  begin
+    SetArrayLength(Args, 2);
+    Args[0] := PairedTerminalLabel;
+    Args[1] := PairedStoreName;
+    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'), Args);
+    Exit;
+  end;
+  SetArrayLength(Args, 2);
+  if PairFailureReason = '' then
+    Args[0] := ExpandConstant('{cm:PairFailureReasonUnknown}')
+  else
+    Args[0] := PairFailureReason;
+  Args[1] := SelectedPairingCode;
+  Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPairFailed}'), Args);
+end;
+
+// --- Wizard lifecycle hooks ---
+
 procedure InitializeWizard;
 begin
   createPrinterPickerPage;
@@ -117,6 +283,8 @@ begin
     populatePrinterPicker;
   if CurPageID = PairCodePage.ID then
     pairCodeOnPageActivate;
+  if CurPageID = wpFinished then
+    WizardForm.FinishedLabel.Caption := buildSuccessMessage;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

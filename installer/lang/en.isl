@@ -5,9 +5,20 @@
 ; referenced by our .iss files via {cm:KeyName}.
 
 [CustomMessages]
-; --- AG2: post-install [Run] status bar ---
+; --- AG2 + AG5: post-install [Run] status bar ---
+RunStatusWriteConfig=Writing configuration...
 RunStatusServiceInstall=Installing Windows service...
 RunStatusServiceStart=Starting service...
+RunStatusPair=Pairing this register...
+
+; --- AG5: success page customization ---
+; %1 = terminal_label, %2 = store_name
+InstallSuccessPaired=✓ %1 (%2) is connected.
+InstallSuccessSkipped=Installation complete. Run 'agentctl pair' to pair this register.
+; %1 = cloud-supplied reason (or PairFailureReasonUnknown fallback);
+; %2 = the 6-digit code the operator entered (so they can retry without re-typing)
+InstallSuccessPairFailed=Installation complete, but pairing failed: %1. Run 'agentctl pair --code %2' from a command prompt to retry.
+PairFailureReasonUnknown=unknown reason
 
 ; --- AG3: printer picker page ---
 PrinterPickerCaption=Printer selection

@@ -15,9 +15,19 @@
 RightToLeft=yes
 
 [CustomMessages]
-; --- AG2: post-install [Run] status bar (translation pending native review) ---
+; --- AG2 + AG5: post-install [Run] status bar (translation pending native review) ---
+RunStatusWriteConfig=كتابة التكوين...
 RunStatusServiceInstall=تثبيت خدمة Windows...
 RunStatusServiceStart=بدء تشغيل الخدمة...
+RunStatusPair=إقران هذا الجهاز...
+
+; --- AG5: success page customization (translation pending native review) ---
+; %1 = terminal_label, %2 = store_name
+InstallSuccessPaired=✓ %1 (%2) متصل.
+InstallSuccessSkipped=اكتمل التثبيت. قم بتشغيل 'agentctl pair' لإقران هذا الجهاز.
+; %1 = cloud reason; %2 = the 6-digit code
+InstallSuccessPairFailed=اكتمل التثبيت، ولكن فشل الإقران: %1. قم بتشغيل 'agentctl pair --code %2' من موجه الأوامر لإعادة المحاولة.
+PairFailureReasonUnknown=سبب غير معروف
 
 ; --- AG3: printer picker page (translation pending native review) ---
 PrinterPickerCaption=اختيار الطابعة

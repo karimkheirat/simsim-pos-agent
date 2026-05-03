@@ -82,7 +82,7 @@ func (s *JSONFileSecretStore) Save(sec *Secrets) error {
 	if err != nil {
 		return fmt.Errorf("secrets: marshal: %w", err)
 	}
-	return writeAtomic(s.path, raw, 0o600)
+	return WriteAtomic(s.path, raw, 0o600)
 }
 
 // Clear removes the file. Returns nil if it doesn't exist (idempotent).
@@ -94,10 +94,14 @@ func (s *JSONFileSecretStore) Clear() error {
 	return err
 }
 
-// writeAtomic writes data to path via a temp file + fsync + rename. Avoids
-// leaving a half-written secrets file on a crash mid-write. Creates
-// parent directories if missing.
-func writeAtomic(path string, data []byte, perm os.FileMode) error {
+// WriteAtomic writes data to path via a temp file + fsync + rename. Avoids
+// leaving a half-written file on a crash mid-write. Creates parent
+// directories if missing.
+//
+// Exported in M4 (sub-task AG5) so cmd/agent's `write-config` subcommand
+// can reuse the same write semantics for config.json. Originally lived
+// here as the secrets-store save primitive — same shape, same guarantees.
+func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("secrets: mkdir parent: %w", err)
 	}

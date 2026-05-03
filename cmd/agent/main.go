@@ -47,6 +47,7 @@ Usage:
   agent service start
   agent service stop
   agent service status
+  agent write-config [flags]
   agent --version
 
 Flags (run):
@@ -55,6 +56,11 @@ Flags (run):
   --port int                  Override listen port (default 47291)
   --log-level string          debug | info | warn | error
   --heartbeat-seconds int     Override heartbeat cadence (default 300)
+
+Flags (write-config):
+  --config string             Path to config.json
+  --printer string            Set printer_name (skip arg leaves unchanged)
+  --cloud-base-url string     Set cloud_base_url (skip arg leaves unchanged)
 `
 
 func main() {
@@ -83,6 +89,8 @@ func main() {
 		runCmd(os.Args[2:])
 	case "service":
 		serviceCmd(os.Args[2:])
+	case "write-config":
+		writeConfigCmd(os.Args[2:])
 	default:
 		// Unknown subcommands fall through to friendly usage.
 		printUsage()

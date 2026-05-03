@@ -10,9 +10,20 @@
 ; add printer-picker page strings; AG4 will add pair-code page strings.
 
 [CustomMessages]
-; --- AG2: post-install [Run] status bar ---
+; --- AG2 + AG5: post-install [Run] status bar ---
+RunStatusWriteConfig=Écriture de la configuration...
 RunStatusServiceInstall=Installation du service Windows...
 RunStatusServiceStart=Démarrage du service...
+RunStatusPair=Jumelage de la caisse...
+
+; --- AG5: success page customization ---
+; %1 = terminal_label (Caisse 1), %2 = store_name
+InstallSuccessPaired=✓ %1 (%2) est connectée.
+InstallSuccessSkipped=Installation terminée. Lancez 'agentctl pair' pour jumeler cette caisse.
+; %1 = cloud-supplied reason (or PairFailureReasonUnknown fallback);
+; %2 = the 6-digit code the operator entered (so they can retry without re-typing)
+InstallSuccessPairFailed=Installation terminée, mais le jumelage a échoué : %1. Lancez 'agentctl pair --code %2' depuis une invite de commande pour réessayer.
+PairFailureReasonUnknown=raison inconnue
 
 ; --- AG3: printer picker page ---
 PrinterPickerCaption=Choix de l'imprimante

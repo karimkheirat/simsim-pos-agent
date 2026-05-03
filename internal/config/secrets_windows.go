@@ -56,7 +56,7 @@ func (s *DPAPISecretStore) Save(sec *Secrets) error {
 	if err != nil {
 		return fmt.Errorf("secrets: dpapi encrypt: %w", err)
 	}
-	return writeAtomic(s.path, blob, 0o600)
+	return WriteAtomic(s.path, blob, 0o600)
 }
 
 // Clear removes the ciphertext file. Idempotent.
