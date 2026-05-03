@@ -28,8 +28,15 @@ import (
 	svcpkg "github.com/karimkheirat/simsim-pos-agent/internal/service"
 )
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// Version is the build-injected version string. The "dev" default
+// applies to local `go build` invocations; release builds set it via
+//
+//   go build -ldflags "-X main.Version=0.3.0" ...
+//
+// It is the single source of truth for agent version reporting:
+// /health and /status responses, heartbeat payloads, log fields, and
+// the --version CLI flag all surface this value.
+var Version = "dev"
 
 const usageTemplate = `Simsim POS Agent %s
 
@@ -40,6 +47,8 @@ Usage:
   agent service start
   agent service stop
   agent service status
+  agent write-config [flags]
+  agent --version
 
 Flags (run):
   --config string             Path to config.json
@@ -47,6 +56,11 @@ Flags (run):
   --port int                  Override listen port (default 47291)
   --log-level string          debug | info | warn | error
   --heartbeat-seconds int     Override heartbeat cadence (default 300)
+
+Flags (write-config):
+  --config string             Path to config.json
+  --printer string            Set printer_name (skip arg leaves unchanged)
+  --cloud-base-url string     Set cloud_base_url (skip arg leaves unchanged)
 `
 
 func main() {
@@ -55,6 +69,14 @@ func main() {
 	// lifecycle via Program.Start / Stop.
 	if !ksvc.Interactive() {
 		runAsService()
+		return
+	}
+
+	// Top-level --version flag, parsed via the standard flag package
+	// against a private FlagSet so it does not interfere with subcommand
+	// dispatch below. Subcommand-specific flags are parsed inside their
+	// handlers.
+	if handleVersionFlag(os.Args[1:]) {
 		return
 	}
 
@@ -67,6 +89,8 @@ func main() {
 		runCmd(os.Args[2:])
 	case "service":
 		serviceCmd(os.Args[2:])
+	case "write-config":
+		writeConfigCmd(os.Args[2:])
 	default:
 		// Unknown subcommands fall through to friendly usage.
 		printUsage()
@@ -74,7 +98,27 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Printf(usageTemplate, version)
+	fmt.Printf(usageTemplate, Version)
+}
+
+// handleVersionFlag inspects args for a top-level --version (or -version)
+// flag; if present, prints Version to stdout and returns true to signal
+// the caller to exit cleanly. Returns false otherwise.
+//
+// Uses a private FlagSet with ContinueOnError + io.Discard output so
+// unknown flags (which subcommands handle) don't generate noise here.
+// Parse stops at the first non-flag arg, so subcommands like
+// "agent service install --foo" reach the dispatch below unaffected.
+func handleVersionFlag(args []string) bool {
+	fs := flag.NewFlagSet("agent-top", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	showVersion := fs.Bool("version", false, "print version and exit")
+	_ = fs.Parse(args)
+	if *showVersion {
+		fmt.Println(Version)
+		return true
+	}
+	return false
 }
 
 // runCmd is the foreground / dev entry point. Same as M1 but now also:
@@ -304,7 +348,7 @@ func loadAndOverride(configPath, printerSpec string, port int, logLevel string, 
 	if heartbeatSeconds != 0 {
 		cfg.HeartbeatSeconds = heartbeatSeconds
 	}
-	cfg.Version = version
+	cfg.Version = Version
 	return cfg, loadErr
 }
 

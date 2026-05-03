@@ -42,7 +42,7 @@ var (
 // Defaults returns the M1 defaults from the spec.
 func Defaults() Config {
 	return Config{
-		Version:          "0.1.0",
+		Version:          "0.1.0", // informational only; build-time Version constant in main() overrides
 		ListenPort:       47291,
 		CloudBaseURL:     "https://web-production-6bb4d.up.railway.app",
 		HeartbeatSeconds: 300,

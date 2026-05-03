@@ -39,9 +39,9 @@ func runUnpair(args []string) int {
 	}
 
 	svc := &pairing.Service{
-		Cloud:   cloud.New(cfg.CloudBaseURL, version),
+		Cloud:   cloud.New(cfg.CloudBaseURL, Version),
 		Secrets: secStore,
-		Version: version,
+		Version: Version,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

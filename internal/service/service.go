@@ -140,10 +140,59 @@ func Install(svc ksvc.Service) error {
 	return nil
 }
 
-// Uninstall removes the service from the OS service manager.
+// Uninstall removes the service from the OS service manager. If the
+// service is currently RUNNING, it is stopped first (10s timeout) so we
+// don't leave an orphan process holding the single-instance mutex
+// (Global\SimsimPOSAgent) — which would silently prevent the next
+// install from starting.
+//
+// Stop failures or timeouts are logged at warn level but do not block
+// uninstall: a stuck service should not be allowed to refuse SCM
+// unregistration. Operator can taskkill the orphan and retry install.
+//
+// Fixes the M2 wart documented in M2_AGENT_COMPLETION_REPORT.md §14.
 func Uninstall(svc ksvc.Service) error {
+	return uninstallWithDeps(svc, statusImpl, 10*time.Second, slog.Default())
+}
+
+// uninstallWithDeps is the testable variant. Production Uninstall pins
+// statusImpl + 10s timeout + slog.Default(); tests inject canned status
+// values, fast timeouts (~50ms), and a discard logger.
+func uninstallWithDeps(svc ksvc.Service, status func() (string, error), stopTimeout time.Duration, logger *slog.Logger) error {
+	state, err := status()
+	if err != nil {
+		// Status query failure shouldn't block uninstall — the SCM may
+		// still be reachable for the unregister itself.
+		logger.Warn("service: status query failed before uninstall; proceeding anyway",
+			"err", err.Error())
+	}
+	if state == "running" {
+		logger.Info("service: stopping before uninstall",
+			"stop_timeout", stopTimeout.String())
+		if err := stopWithTimeout(svc, stopTimeout); err != nil {
+			logger.Warn("service: stop before uninstall failed; proceeding to unregister anyway",
+				"err", err.Error())
+		}
+	}
 	if err := ksvc.Control(svc, "uninstall"); err != nil {
 		return fmt.Errorf("uninstall: %w", err)
 	}
 	return nil
+}
+
+// stopWithTimeout calls ksvc.Control(svc, "stop") in a goroutine and
+// returns either its result or a timeout error. If the timeout fires,
+// the goroutine keeps running in the background — uninstall is a
+// short-lived operation so the leak is bounded by process lifetime.
+func stopWithTimeout(svc ksvc.Service, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- ksvc.Control(svc, "stop")
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("stop did not return within %v", timeout)
+	}
 }
