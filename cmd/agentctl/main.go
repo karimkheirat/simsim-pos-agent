@@ -12,12 +12,20 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// Version is the build-injected version string. The "dev" default
+// applies to local `go build` invocations; release builds set it via
+//
+//   go build -ldflags "-X main.Version=0.3.0" ...
+//
+// Mirrors cmd/agent's Version — both binaries report the same version
+// to the cloud (heartbeat, pair) and to the operator (--version flag).
+var Version = "dev"
 
 const usageTemplate = `Simsim POS Agent CLI %s
 
@@ -25,6 +33,7 @@ Usage:
   agentctl pair --code <6-digit-code> [flags]
   agentctl unpair [flags]
   agentctl status [flags]
+  agentctl --version
 
 Common flags:
   --config string    Path to config.json
@@ -32,6 +41,12 @@ Common flags:
 `
 
 func main() {
+	// Top-level --version, parsed via the standard flag package against
+	// a private FlagSet so subcommand dispatch below is unaffected.
+	if handleVersionFlag(os.Args[1:]) {
+		return
+	}
+
 	if len(os.Args) < 2 {
 		printUsage()
 		return
@@ -54,5 +69,20 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Printf(usageTemplate, version)
+	fmt.Printf(usageTemplate, Version)
+}
+
+// handleVersionFlag inspects args for a top-level --version (or -version)
+// flag; if present, prints Version to stdout and returns true to signal
+// the caller to exit cleanly. Same shape as cmd/agent's helper.
+func handleVersionFlag(args []string) bool {
+	fs := flag.NewFlagSet("agentctl-top", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	showVersion := fs.Bool("version", false, "print version and exit")
+	_ = fs.Parse(args)
+	if *showVersion {
+		fmt.Println(Version)
+		return true
+	}
+	return false
 }

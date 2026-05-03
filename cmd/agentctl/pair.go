@@ -68,12 +68,12 @@ func runPair(args []string) int {
 		return 1
 	}
 
-	client := cloud.New(cfg.CloudBaseURL, version)
+	client := cloud.New(cfg.CloudBaseURL, Version)
 	svc := &pairing.Service{
 		Cloud:     client,
 		Secrets:   secStore,
 		MachineID: machineID,
-		Version:   version,
+		Version:   Version,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -145,7 +145,7 @@ func printPairError(err error) {
 // effort from the local agent's /health endpoint.
 func buildHeartbeat(cfg config.Config) cloud.HeartbeatRequest {
 	return cloud.HeartbeatRequest{
-		AgentVersion:  version,
+		AgentVersion:  Version,
 		OSVersion:     runtime.GOOS,
 		UptimeSeconds: 0,
 		Printer:       fetchPrinterStatusFromLocalAgent(cfg.ListenPort),
