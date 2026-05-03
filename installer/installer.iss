@@ -245,7 +245,7 @@ end;
 // %1/%2 placeholders feed Inno's localized %Format substitution.
 function buildSuccessMessage: String;
 var
-  Args: TArrayOfString;
+  Reason: String;
 begin
   if SkipPairing then
   begin
@@ -254,19 +254,21 @@ begin
   end;
   if PairResultCode = 0 then
   begin
-    SetArrayLength(Args, 2);
-    Args[0] := PairedTerminalLabel;
-    Args[1] := PairedStoreName;
-    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'), Args);
+    // Literal array constructor at the call site: required pattern.
+    // Passing an Args variable to FmtMessage's 'array of String' open-
+    // array parameter triggers a Type Mismatch in PascalScript Unicode
+    // (RemObjects PascalScript #129). v0.3.0/v0.3.1 used the variable
+    // pattern and crashed here.
+    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'),
+                         [PairedTerminalLabel, PairedStoreName]);
     Exit;
   end;
-  SetArrayLength(Args, 2);
   if PairFailureReason = '' then
-    Args[0] := ExpandConstant('{cm:PairFailureReasonUnknown}')
+    Reason := ExpandConstant('{cm:PairFailureReasonUnknown}')
   else
-    Args[0] := PairFailureReason;
-  Args[1] := SelectedPairingCode;
-  Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPairFailed}'), Args);
+    Reason := PairFailureReason;
+  Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPairFailed}'),
+                       [Reason, SelectedPairingCode]);
 end;
 
 // --- Wizard lifecycle hooks ---
