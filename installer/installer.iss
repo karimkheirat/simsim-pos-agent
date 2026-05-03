@@ -245,7 +245,7 @@ end;
 // %1/%2 placeholders feed Inno's localized %Format substitution.
 function buildSuccessMessage: String;
 var
-  Args: array of String;
+  Args: TArrayOfString;
 begin
   if SkipPairing then
   begin
