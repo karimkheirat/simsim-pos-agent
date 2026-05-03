@@ -96,3 +96,32 @@ Filename: "{app}\bin\agent.exe"; Parameters: "service uninstall"; \
 Name: "{group}\Simsim POS Agent — Statut"; Filename: "{app}\bin\agentctl.exe"; \
   Parameters: "status"; WorkingDir: "{app}\bin"
 Name: "{group}\Désinstaller Simsim POS Agent"; Filename: "{uninstallexe}"
+
+[Code]
+// Single [Code] section for the whole installer. Per-page logic lives
+// in dedicated #include'd files for readability — the included files
+// are pure Pascal (no section headers) and get textually inlined here.
+
+#include "printer-picker.iss"
+#include "pair-code-page.iss"
+
+procedure InitializeWizard;
+begin
+  createPrinterPickerPage;
+  createPairCodePage;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = PrinterPickerPage.ID then
+    populatePrinterPicker;
+  if CurPageID = PairCodePage.ID then
+    pairCodeOnPageActivate;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = PairCodePage.ID then
+    Result := pairCodeValidate;
+end;
