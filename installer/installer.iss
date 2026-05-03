@@ -293,3 +293,70 @@ begin
   if CurPageID = PairCodePage.ID then
     Result := pairCodeValidate;
 end;
+
+// --- AG6: uninstaller flow ---
+//
+// Default uninstall removes only what's under {app} (Inno's automatic
+// file tracking) plus the [UninstallRun] entries (unpair → service stop
+// → service uninstall). The data tree at {commonappdata}\Simsim\POSAgent
+// (config.json, secrets.dat, logs) survives by default — supports the
+// uninstall-then-reinstall workflow without losing the operator's
+// pairing or printer configuration.
+//
+// The InitializeUninstall prompt lets the operator opt OUT of that
+// preservation by choosing "Supprimer" — in which case usPostUninstall
+// recursively rmdirs the data tree.
+
+// KeepData defaults to True (safe). Set by InitializeUninstall based on
+// the operator's response to the keep-data prompt. Read by
+// CurUninstallStepChanged at usPostUninstall.
+var
+  KeepData: Boolean;
+
+function InitializeUninstall: Boolean;
+var
+  Labels: TArrayOfString;
+  Choice: Integer;
+begin
+  Result := True;     // proceed with uninstall regardless
+  KeepData := True;   // safe default if operator dismisses the dialog
+
+  SetArrayLength(Labels, 2);
+  Labels[0] := ExpandConstant('{cm:UninstallKeepDataYes}');
+  Labels[1] := ExpandConstant('{cm:UninstallKeepDataNo}');
+
+  // TaskDialogMsgBox lets us override the Yes/No labels with the
+  // localized "Conserver" / "Supprimer" pair. ShieldButton = -1 ->
+  // no UAC shield on either button (no privilege escalation involved).
+  Choice := TaskDialogMsgBox('',
+    ExpandConstant('{cm:UninstallKeepDataPrompt}'),
+    mbConfirmation,
+    MB_YESNO,
+    Labels,
+    -1);
+
+  case Choice of
+    IDYES: KeepData := True;
+    IDNO:  KeepData := False;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  DataDir: String;
+begin
+  // usPostUninstall fires after [UninstallRun] entries + Inno's {app}
+  // file removal. The service is stopped and uninstalled; the binary
+  // tree under Program Files is gone. Now we conditionally rmdir the
+  // data tree under ProgramData.
+  if (CurUninstallStep = usPostUninstall) and not KeepData then
+  begin
+    DataDir := ExpandConstant('{commonappdata}\Simsim\POSAgent');
+    if DirExists(DataDir) then
+      // DelTree(Path, IsDir=True, DeleteFiles=True, DeleteSubdirsAlso=True).
+      // Returns False on partial failure — we don't surface that to
+      // the operator; any leftover is harmless and they can rmdir
+      // manually if they care.
+      DelTree(DataDir, True, True, True);
+  end;
+end;

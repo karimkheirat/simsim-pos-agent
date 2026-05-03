@@ -25,6 +25,11 @@ InstallSuccessSkipped=Installation terminée. Lancez 'agentctl pair' pour jumele
 InstallSuccessPairFailed=Installation terminée, mais le jumelage a échoué : %1. Lancez 'agentctl pair --code %2' depuis une invite de commande pour réessayer.
 PairFailureReasonUnknown=raison inconnue
 
+; --- AG6: uninstaller keep-data prompt ---
+UninstallKeepDataPrompt=Conserver les données de configuration de la caisse (config, secrets DPAPI, journaux) sous C:\ProgramData\Simsim\POSAgent ?%n%nCliquez « Conserver » pour les garder en cas de réinstallation, ou « Supprimer » pour tout effacer.
+UninstallKeepDataYes=Conserver
+UninstallKeepDataNo=Supprimer
+
 ; --- AG3: printer picker page ---
 PrinterPickerCaption=Choix de l'imprimante
 PrinterPickerSubcaption=Sélectionnez l'imprimante de tickets thermique connectée à cet ordinateur.

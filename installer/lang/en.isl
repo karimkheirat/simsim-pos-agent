@@ -20,6 +20,11 @@ InstallSuccessSkipped=Installation complete. Run 'agentctl pair' to pair this re
 InstallSuccessPairFailed=Installation complete, but pairing failed: %1. Run 'agentctl pair --code %2' from a command prompt to retry.
 PairFailureReasonUnknown=unknown reason
 
+; --- AG6: uninstaller keep-data prompt ---
+UninstallKeepDataPrompt=Keep this register's configuration data (config, DPAPI secrets, logs) under C:\ProgramData\Simsim\POSAgent?%n%nClick 'Keep' to preserve them in case of reinstallation, or 'Delete' to remove everything.
+UninstallKeepDataYes=Keep
+UninstallKeepDataNo=Delete
+
 ; --- AG3: printer picker page ---
 PrinterPickerCaption=Printer selection
 PrinterPickerSubcaption=Select the thermal receipt printer connected to this computer.

@@ -29,6 +29,11 @@ InstallSuccessSkipped=اكتمل التثبيت. قم بتشغيل 'agentctl pai
 InstallSuccessPairFailed=اكتمل التثبيت، ولكن فشل الإقران: %1. قم بتشغيل 'agentctl pair --code %2' من موجه الأوامر لإعادة المحاولة.
 PairFailureReasonUnknown=سبب غير معروف
 
+; --- AG6: uninstaller keep-data prompt (translation pending native review) ---
+UninstallKeepDataPrompt=هل تريد الاحتفاظ ببيانات تكوين هذا الجهاز (config، أسرار DPAPI، السجلات) ضمن C:\ProgramData\Simsim\POSAgent؟%n%nانقر «احتفاظ» للاحتفاظ بها في حالة إعادة التثبيت، أو «حذف» لمسح كل شيء.
+UninstallKeepDataYes=احتفاظ
+UninstallKeepDataNo=حذف
+
 ; --- AG3: printer picker page (translation pending native review) ---
 PrinterPickerCaption=اختيار الطابعة
 PrinterPickerSubcaption=اختر طابعة الإيصالات الحرارية المتصلة بهذا الكمبيوتر.
