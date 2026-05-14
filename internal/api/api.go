@@ -93,8 +93,18 @@ func New(cfg Config, p printer.Printer) (*Server, error) {
 	// discover the local agent and verify the bound terminal_id matches
 	// the cashier's current session before sending any /print request.
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("POST /print", s.requireTerminalToken(s.handlePrint))
-	mux.HandleFunc("POST /test-print", s.requireTerminalToken(s.handleTestPrint))
+	// M13 A.1 — /handshake is also unauthenticated at the handler level:
+	// reaching the loopback listener IS the trust boundary for the
+	// bootstrap. It mints the JWT that /print + /test-print then verify.
+	mux.HandleFunc("GET /handshake", s.handleHandshake)
+	// M13 A.1 — /print + /test-print move from requireTerminalToken to
+	// requireAuth, which accepts EITHER the new JWT (Authorization:
+	// Bearer) OR the legacy X-Terminal-Token. The legacy header keeps
+	// working until A.3 removes it (once the web client has cut over).
+	mux.HandleFunc("POST /print", s.requireAuth(s.handlePrint))
+	mux.HandleFunc("POST /test-print", s.requireAuth(s.handleTestPrint))
+	// /drawer/open + /status are NOT print operations and are out of
+	// the A.1 scope — they stay on the legacy X-Terminal-Token gate.
 	mux.HandleFunc("POST /drawer/open", s.requireTerminalToken(s.handleDrawerOpen))
 	mux.HandleFunc("GET /status", s.requireTerminalToken(s.handleStatus))
 
