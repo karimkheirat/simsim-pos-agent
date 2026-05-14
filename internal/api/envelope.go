@@ -17,6 +17,25 @@ const (
 	CodeInvalidReceipt       = "INVALID_RECEIPT"
 	CodeRateLimited          = "RATE_LIMITED" // unused until M3 rate-limit work
 	CodeInternal             = "INTERNAL"
+
+	// M13 A.1 — JWT handshake auth codes.
+	//
+	// CodeAgentUnpaired is distinct from CodeNotPaired: NOT_PAIRED is
+	// returned by the legacy requireTerminalToken middleware; AGENT_UNPAIRED
+	// is the GET /handshake response when no terminal token is on disk to
+	// sign with. Same root cause, separate code per the M13 A.1 task spec
+	// so the web client can branch on "the handshake endpoint itself says
+	// unpaired" vs "a protected endpoint rejected me."
+	CodeAgentUnpaired = "AGENT_UNPAIRED"
+	// The four JWT-verification failure codes. The requireAuth middleware
+	// maps jwt.ErrMalformed → JWT_INVALID, jwt.ErrBadSignature →
+	// SIGNATURE_INVALID, jwt.ErrExpired → JWT_EXPIRED, and does the
+	// aud / iss policy checks itself → AUDIENCE_MISMATCH / ISSUER_MISMATCH.
+	CodeJWTInvalid       = "JWT_INVALID"
+	CodeJWTExpired       = "JWT_EXPIRED"
+	CodeSignatureInvalid = "SIGNATURE_INVALID"
+	CodeAudienceMismatch = "AUDIENCE_MISMATCH"
+	CodeIssuerMismatch   = "ISSUER_MISMATCH"
 )
 
 type envelopeOK struct {
