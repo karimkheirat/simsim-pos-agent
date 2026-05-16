@@ -26,7 +26,41 @@ type Config struct {
 	// heartbeats. Default 300 (5min). Added in M2 (sub-task A7).
 	HeartbeatSeconds int `json:"heartbeat_seconds"`
 
-	PrinterName    string   `json:"printer_name"`
+	// PrinterName is the LEGACY receipt-printer-only field. Kept for
+	// back-compat with deployed config.json files; new fields are
+	// ReceiptPrinterName + LabelPrinterName below.
+	//
+	// Back-compat mapping (in Load):
+	//   - If PrinterName is set AND ReceiptPrinterName is empty,
+	//     PrinterName's value is mirrored into ReceiptPrinterName.
+	//   - If both are set, ReceiptPrinterName wins (operator was
+	//     explicit about the two-printer split).
+	//
+	// Operators migrating to the two-printer config (M13 Track B) should
+	// drop PrinterName and use ReceiptPrinterName + LabelPrinterName.
+	PrinterName string `json:"printer_name"`
+
+	// ReceiptPrinterName is the ESC/POS receipt printer name (the
+	// thermal 80mm/58mm printer). Added in M13 Track B PR 1 alongside
+	// the two-printer architecture split. Empty = no receipt printer
+	// configured (agent reports PRINTER_NOT_CONFIGURED on /print).
+	ReceiptPrinterName string `json:"receipt_printer_name"`
+
+	// LabelPrinterName is the TSPL label printer name (the small
+	// 40x30mm / 50x40mm / 60x40mm thermal label printer). Empty = no
+	// label printer configured (agent will report
+	// NO_LABEL_PRINTER_CONFIGURED on /print-label, added in PR 2).
+	LabelPrinterName string `json:"label_printer_name"`
+
+	// TSPLDialect selects the EAN-13 command variant for the label
+	// printer. Most TSPL2 printers use "EAN13" (no hyphen); Rongta
+	// firmware requires "EAN-13" (hyphen). Valid values: "standard"
+	// (default) or "rongta". Anything else is rejected by Validate.
+	//
+	// Other TSPL commands are dialect-agnostic — this field only
+	// affects the BarcodeEAN13 builder in internal/tspl.
+	TSPLDialect string `json:"tspl_dialect"`
+
 	LogLevel       string   `json:"log_level"`
 	AllowedOrigins []string `json:"allowed_origins"`
 
@@ -57,7 +91,14 @@ func Defaults() Config {
 		CloudBaseURL:     "https://web-production-6bb4d.up.railway.app",
 		HeartbeatSeconds: 300,
 		PrinterName:      "",
-		LogLevel:         "info",
+		// M13 Track B PR 1 — new two-printer fields default empty;
+		// operators set one or both. Defaults to DialectStandard for
+		// label printers since the majority of pilot-targeted TSPL
+		// printers (Xprinter, Aclas, TSC) are standard-dialect.
+		ReceiptPrinterName: "",
+		LabelPrinterName:   "",
+		TSPLDialect:        "standard",
+		LogLevel:           "info",
 		AllowedOrigins: []string{
 			"https://web-production-6bb4d.up.railway.app",
 			"https://opensimsim.co",
@@ -94,7 +135,23 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return Defaults(), fmt.Errorf("%w: %s: %v", ErrConfigMalformed, path, err)
 	}
+	applyPrinterBackCompat(&cfg)
 	return cfg, nil
+}
+
+// applyPrinterBackCompat mirrors the legacy PrinterName field into
+// ReceiptPrinterName when only the legacy field is set in the loaded
+// config. Pre-M13-B deployments wrote `"printer_name": "<receipt>"`;
+// those configs MUST keep working after the two-printer refactor.
+//
+// Mapping (per Karim Q1 decision):
+//   - PrinterName set, ReceiptPrinterName empty → mirror.
+//   - Both set                                  → ReceiptPrinterName wins.
+//   - Neither set                                → both stay empty.
+func applyPrinterBackCompat(c *Config) {
+	if c.ReceiptPrinterName == "" && c.PrinterName != "" {
+		c.ReceiptPrinterName = c.PrinterName
+	}
 }
 
 // Validate enforces invariants the rest of the agent assumes:
@@ -128,6 +185,15 @@ func Validate(c Config) error {
 	// one place to extend.
 	if c.PaperWidthMM != 58 && c.PaperWidthMM != 80 {
 		return fmt.Errorf("config: paper_width_mm %d invalid (want 58 or 80)", c.PaperWidthMM)
+	}
+	// M13 Track B PR 1 — tspl_dialect gates the BarcodeEAN13 hyphen split.
+	// "standard" is the TSC/Xprinter/Aclas baseline; "rongta" is the
+	// Rongta-firmware variant. Anything else is rejected so a typo can't
+	// silently print broken barcodes.
+	switch c.TSPLDialect {
+	case "standard", "rongta":
+	default:
+		return fmt.Errorf("config: tspl_dialect %q invalid (want standard or rongta)", c.TSPLDialect)
 	}
 	return nil
 }

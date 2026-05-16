@@ -11,9 +11,13 @@ const (
 	CodeUnauthenticated      = "UNAUTHENTICATED"
 	CodeNotPaired            = "NOT_PAIRED"
 	CodePrinterNotConfigured = "PRINTER_NOT_CONFIGURED"
-	CodePrinterOffline       = "PRINTER_OFFLINE"
-	CodePrintFailed          = "PRINT_FAILED"
-	CodeDrawerFailed         = "DRAWER_FAILED"
+	// M13 Track B PR 1 — distinguishes "no LABEL printer wired" from
+	// the receipt-printer PRINTER_NOT_CONFIGURED case. Surfaced by
+	// printerForIntent("label") and by handler intent='label' branches.
+	CodeNoLabelPrinterConfigured = "NO_LABEL_PRINTER_CONFIGURED"
+	CodePrinterOffline           = "PRINTER_OFFLINE"
+	CodePrintFailed              = "PRINT_FAILED"
+	CodeDrawerFailed             = "DRAWER_FAILED"
 	CodeInvalidReceipt       = "INVALID_RECEIPT"
 	CodeRateLimited          = "RATE_LIMITED" // unused until M3 rate-limit work
 	CodeInternal             = "INTERNAL"

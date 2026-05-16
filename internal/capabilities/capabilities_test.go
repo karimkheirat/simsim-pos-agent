@@ -163,6 +163,142 @@ func TestLookup_UnknownModelFallback(t *testing.T) {
 	}
 }
 
+// ── M13 Track B PR 1 — LookupLabel (TSPL label printers) ──
+
+func TestLookupLabel_KnownModels(t *testing.T) {
+	tests := []struct {
+		name        string
+		printerName string
+	}{
+		{"Rongta RP-410", "Rongta RP-410"},
+		{"Rongta RP-420", "Rongta RP-420 80mm"},
+		{"Rongta RP-426A", "Rongta RP-426A"},
+		{"Xprinter XP-DT426B", "Xprinter XP-DT426B"},
+		{"Xprinter XP-DT108B", "Xprinter XP-DT108B Thermal"},
+		{"Xprinter XP-470B", "Xprinter XP-470B"},
+		{"Aclas PP7X", "Aclas PP7X Label"},
+		{"Aclas PP8X", "Aclas PP8X"},
+		{"TSC TDP-244", "TSC TDP-244"},
+		{"TSC TTP-244 Pro", "TSC TTP-244 Pro"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := LookupLabel(tt.printerName)
+			if got.Source != SourceModelLookup {
+				t.Errorf("Source = %q, want model_lookup", got.Source)
+			}
+			if got.PaperWidthMM != 60 {
+				t.Errorf("PaperWidthMM = %d, want 60", got.PaperWidthMM)
+			}
+			if got.CutSupported {
+				t.Errorf("CutSupported = true, want false (label printers tear at gap)")
+			}
+			if got.DrawerSupported {
+				t.Errorf("DrawerSupported = true, want false (no cash drawer)")
+			}
+			if !got.QRSupported {
+				t.Errorf("QRSupported = false, want true (TSPL2 native QRCODE)")
+			}
+			if !reflect.DeepEqual(got.BarcodeTypes, []string{"CODE128", "EAN13", "QR"}) {
+				t.Errorf("BarcodeTypes = %v, want [CODE128 EAN13 QR]", got.BarcodeTypes)
+			}
+			if !reflect.DeepEqual(got.Codepages, []string{"CP1252"}) {
+				t.Errorf("Codepages = %v, want [CP1252]", got.Codepages)
+			}
+		})
+	}
+}
+
+func TestLookupLabel_CaseInsensitive(t *testing.T) {
+	tests := []string{
+		"rp-410",
+		"RP-410",
+		"Rp-410",
+		"My Printer: rp-410",
+	}
+	for _, in := range tests {
+		t.Run(in, func(t *testing.T) {
+			got := LookupLabel(in)
+			if got.Source != SourceModelLookup {
+				t.Errorf("Source = %q, want model_lookup", got.Source)
+			}
+		})
+	}
+}
+
+func TestLookupLabel_UnknownFallback(t *testing.T) {
+	tests := []string{
+		"",
+		"Star SP-331",     // a real receipt printer, NOT a label printer
+		"Brother HL-2030", // unrelated
+		"Generic / Text Only",
+	}
+	for _, in := range tests {
+		t.Run(in, func(t *testing.T) {
+			got := LookupLabel(in)
+			if got.Source != SourceFallback {
+				t.Errorf("Source = %q, want fallback", got.Source)
+			}
+			// Fallback shares the same defaults as known label models
+			// in v1; only `source` distinguishes.
+			if got.PaperWidthMM != 60 {
+				t.Errorf("PaperWidthMM = %d, want 60", got.PaperWidthMM)
+			}
+			if got.CutSupported {
+				t.Errorf("CutSupported = true, want false")
+			}
+			if got.DrawerSupported {
+				t.Errorf("DrawerSupported = true, want false")
+			}
+			if !got.QRSupported {
+				t.Errorf("QRSupported = false, want true")
+			}
+		})
+	}
+}
+
+func TestLookupLabel_TTP244ProBeforeTTP244(t *testing.T) {
+	// "TTP-244 Pro" must NOT mask to the plain "TTP-244" entry.
+	// Same most-specific-first invariant as the receipt table.
+	got := LookupLabel("TSC TTP-244 Pro")
+	if got.Source != SourceModelLookup {
+		t.Errorf("Source = %q, want model_lookup", got.Source)
+	}
+}
+
+func TestLookupLabel_ReturnsIndependentSlices(t *testing.T) {
+	// Mutating one caller's BarcodeTypes / Codepages must NOT affect
+	// another caller's result. Pins the factory-not-shared-state design
+	// for the label table.
+	a := LookupLabel("Rongta RP-410")
+	a.BarcodeTypes = append(a.BarcodeTypes, "DATAMATRIX_HIJACKED")
+	a.Codepages = append(a.Codepages, "CP-HIJACKED")
+
+	b := LookupLabel("Rongta RP-410")
+	if len(b.BarcodeTypes) != 3 {
+		t.Errorf("BarcodeTypes len after mutating sibling = %d, want 3 — label table is aliasing", len(b.BarcodeTypes))
+	}
+	if len(b.Codepages) != 1 {
+		t.Errorf("Codepages len after mutating sibling = %d, want 1 — label table is aliasing", len(b.Codepages))
+	}
+	for _, bt := range b.BarcodeTypes {
+		if strings.Contains(bt, "HIJACKED") {
+			t.Errorf("BarcodeTypes leaked sibling mutation: %v", b.BarcodeTypes)
+		}
+	}
+}
+
+// TestLookupLabel_DoesNotMatchReceiptPrinter — sanity that the two
+// lookup tables are independent. A name that matches a receipt
+// printer (e.g. "Star SP-331") must NOT accidentally produce a
+// model_lookup label row.
+func TestLookupLabel_DoesNotMatchReceiptPrinter(t *testing.T) {
+	got := LookupLabel("Star SP-331")
+	if got.Source != SourceFallback {
+		t.Errorf("Star SP-331 in LookupLabel got Source = %q, want fallback (it's a receipt printer)", got.Source)
+	}
+}
+
 func TestLookup_ReturnsIndependentSlices(t *testing.T) {
 	// Mutating one caller's BarcodeTypes / Codepages must NOT affect
 	// another caller's result. Pins the factory-not-shared-state design.

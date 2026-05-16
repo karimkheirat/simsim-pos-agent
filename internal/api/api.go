@@ -56,23 +56,54 @@ type Config struct {
 	// Added in M13 A.5a. Defaults to 80 when zero (back-compat with
 	// pre-A.5a constructions of api.Config — e.g. older tests).
 	PaperWidthMM int
+
+	// TSPLDialect selects the EAN-13 command variant for the label
+	// printer's TSPL builder ("standard" or "rongta"). Added in M13
+	// Track B PR 1. Empty / unset → treated as "standard" (the
+	// Xprinter/TSC/Aclas baseline). Surfaced to /capabilities's
+	// label sibling so the web client can mirror the choice in any
+	// preview UI.
+	TSPLDialect string
 }
 
 // Server holds the assembled HTTP handler chain and its dependencies.
+//
+// M13 Track B PR 1 — the single printer reference split into two:
+// receiptPrinter drives ESC/POS /print + /test-print + /drawer/open,
+// labelPrinter drives the TSPL /print-label endpoint (added in PR 2).
+// One or both may be nil; per-endpoint guards (or printerForIntent)
+// surface PRINTER_NOT_CONFIGURED / NO_LABEL_PRINTER_CONFIGURED.
 type Server struct {
-	cfg     Config
-	logger  *slog.Logger
-	printer printer.Printer
-	secrets config.SecretStore
-	idem    *IdempotencyStore
-	handler http.Handler
+	cfg            Config
+	logger         *slog.Logger
+	receiptPrinter printer.Printer
+	labelPrinter   printer.Printer
+	secrets        config.SecretStore
+	idem           *IdempotencyStore
+	handler        http.Handler
 }
 
 // New builds a Server with all middleware wired and routes registered.
 // The returned *Server is ready to serve via Run or to mount on an
 // httptest.Server (via the unexported handler field; tests live in this
 // package).
+//
+// Back-compat shape: callers pass the receipt printer as p (the
+// pre-M13-Track-B signature). For a two-printer deployment, call
+// NewTwo and pass both printers explicitly.
 func New(cfg Config, p printer.Printer) (*Server, error) {
+	return NewTwo(cfg, p, nil)
+}
+
+// NewTwo is the two-printer constructor introduced in M13 Track B PR 1.
+// receiptPrinter drives ESC/POS endpoints (/print, /test-print,
+// /drawer/open); labelPrinter drives the TSPL /print-label endpoint
+// (added in PR 2 and reached via the intent='label' query param on
+// /test-print).
+//
+// Either may be nil: handlers and printerForIntent surface
+// PRINTER_NOT_CONFIGURED / NO_LABEL_PRINTER_CONFIGURED accordingly.
+func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, error) {
 	if cfg.ListenAddr == "" {
 		return nil, errors.New("api: ListenAddr is required")
 	}
@@ -92,13 +123,20 @@ func New(cfg Config, p printer.Printer) (*Server, error) {
 	if cfg.PaperWidthMM == 0 {
 		cfg.PaperWidthMM = 80
 	}
+	// M13 Track B PR 1 — default TSPL dialect for callers that
+	// construct api.Config directly. Production main wires this from
+	// the validated config.Config loader (which has the same default).
+	if cfg.TSPLDialect == "" {
+		cfg.TSPLDialect = "standard"
+	}
 
 	s := &Server{
-		cfg:     cfg,
-		logger:  cfg.Logger,
-		printer: p,
-		secrets: cfg.Secrets,
-		idem:    NewIdempotencyStore(cfg.IdempotencyTTL),
+		cfg:            cfg,
+		logger:         cfg.Logger,
+		receiptPrinter: receiptPrinter,
+		labelPrinter:   labelPrinter,
+		secrets:        cfg.Secrets,
+		idem:           NewIdempotencyStore(cfg.IdempotencyTTL),
 	}
 
 	mux := http.NewServeMux()
