@@ -154,6 +154,10 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// working until A.3 removes it (once the web client has cut over).
 	mux.HandleFunc("POST /print", s.requireAuth(s.handlePrint))
 	mux.HandleFunc("POST /test-print", s.requireAuth(s.handleTestPrint))
+	// M13 Track B PR 2 — /print-label is the TSPL counterpart to /print.
+	// Same JWT gate (requireAuth); routes to s.labelPrinter; surfaces
+	// 503 NO_LABEL_PRINTER_CONFIGURED when no label printer is wired.
+	mux.HandleFunc("POST /print-label", s.requireAuth(s.handlePrintLabel))
 	// M13 A.5a — /capabilities surfaces the printer-feature matrix
 	// (paper width, cut, drawer, barcode types) the web client uses to
 	// gate UI affordances. JWT-authed via requireAuth (same gate as

@@ -22,6 +22,27 @@ const (
 	CodeRateLimited          = "RATE_LIMITED" // unused until M3 rate-limit work
 	CodeInternal             = "INTERNAL"
 
+	// M13 Track B PR 2 — /print-label endpoint error codes.
+	//
+	// CodeLabelInvalid is the 400 returned when the request body's
+	// label fails Label.Validate (dimensions, element coordinates,
+	// per-element-type required fields). Distinct from
+	// CodeInvalidReceipt so the web client can route label errors
+	// to the label-template editor rather than the receipt path.
+	CodeLabelInvalid = "LABEL_INVALID"
+
+	// CodeLabelRequiresUnsupportedCapability is the 400 returned when
+	// the label references a printer feature (currently only QR) the
+	// configured label printer does NOT report via /capabilities. The
+	// message carries the specific feature name so the web client can
+	// surface "this template requires a printer with QR support."
+	CodeLabelRequiresUnsupportedCapability = "LABEL_REQUIRES_UNSUPPORTED_CAPABILITY"
+
+	// CodeLabelPrintFailed mirrors CodePrintFailed but for the
+	// /print-label transport path. Kept distinct so dashboards can
+	// chart the two pipelines separately.
+	CodeLabelPrintFailed = "LABEL_PRINT_FAILED"
+
 	// M13 A.1 — JWT handshake auth codes.
 	//
 	// CodeAgentUnpaired is distinct from CodeNotPaired: NOT_PAIRED is
