@@ -32,6 +32,9 @@ func TestDefaults(t *testing.T) {
 	if len(c.AllowedOrigins) != 2 {
 		t.Errorf("AllowedOrigins len = %d, want 2", len(c.AllowedOrigins))
 	}
+	if c.PaperWidthMM != 80 {
+		t.Errorf("PaperWidthMM = %d, want 80", c.PaperWidthMM)
+	}
 }
 
 func TestDefaultMachineIDPath(t *testing.T) {
@@ -114,6 +117,26 @@ func TestLoad_PartialOverride(t *testing.T) {
 	if len(cfg.AllowedOrigins) != 2 {
 		t.Errorf("AllowedOrigins len = %d, want 2 (default)", len(cfg.AllowedOrigins))
 	}
+	if cfg.PaperWidthMM != 80 {
+		t.Errorf("PaperWidthMM = %d, want 80 (default)", cfg.PaperWidthMM)
+	}
+}
+
+func TestLoad_PaperWidth58_OK(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "paper58.json")
+	if err := os.WriteFile(path, []byte(`{"paper_width_mm": 58}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PaperWidthMM != 58 {
+		t.Errorf("PaperWidthMM = %d, want 58", cfg.PaperWidthMM)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
 }
 
 func TestValidate_Success(t *testing.T) {
@@ -137,6 +160,11 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"empty origin in list", func(c *Config) { c.AllowedOrigins = []string{"https://ok.example", ""} }, "allowed_origins"},
 		{"heartbeat_seconds zero", func(c *Config) { c.HeartbeatSeconds = 0 }, "heartbeat_seconds"},
 		{"heartbeat_seconds negative", func(c *Config) { c.HeartbeatSeconds = -5 }, "heartbeat_seconds"},
+		// M13 A.5a — only 58 and 80 are valid; everything else rejected.
+		{"paper_width_mm zero", func(c *Config) { c.PaperWidthMM = 0 }, "paper_width_mm"},
+		{"paper_width_mm 76 (non-spec)", func(c *Config) { c.PaperWidthMM = 76 }, "paper_width_mm"},
+		{"paper_width_mm 112 (non-spec)", func(c *Config) { c.PaperWidthMM = 112 }, "paper_width_mm"},
+		{"paper_width_mm negative", func(c *Config) { c.PaperWidthMM = -1 }, "paper_width_mm"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

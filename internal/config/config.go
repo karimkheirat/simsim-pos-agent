@@ -29,6 +29,16 @@ type Config struct {
 	PrinterName    string   `json:"printer_name"`
 	LogLevel       string   `json:"log_level"`
 	AllowedOrigins []string `json:"allowed_origins"`
+
+	// PaperWidthMM is the thermal paper width the renderer formats
+	// for. Added in M13 A.5a. Valid values: 58 or 80 (millimetres).
+	// Maps to receiptWidth=32 (58mm) or receiptWidth=42 (80mm) in
+	// internal/receipt/render.go. Defaults to 80.
+	//
+	// Cap-aware: the value reported via GET /capabilities is this
+	// configured width, NOT the per-model lookup hint in
+	// internal/capabilities — admins override hardware defaults here.
+	PaperWidthMM int `json:"paper_width_mm"`
 }
 
 // Sentinel errors returned by Load. Callers can detect via errors.Is and
@@ -52,6 +62,11 @@ func Defaults() Config {
 			"https://web-production-6bb4d.up.railway.app",
 			"https://opensimsim.co",
 		},
+		// M13 A.5a — 80mm is the Algeria-realistic default. The vast
+		// majority of pilot-targeted printers ship as 80mm; 58mm is
+		// for smaller-format retail (newsstand, deli labels) which
+		// the agent supports but doesn't default to.
+		PaperWidthMM: 80,
 	}
 }
 
@@ -106,6 +121,13 @@ func Validate(c Config) error {
 		if o == "" {
 			return fmt.Errorf("config: allowed_origins[%d] is empty", i)
 		}
+	}
+	// M13 A.5a — only 58 or 80 are valid widths. Anything else (76mm,
+	// 112mm, etc.) is rejected loudly rather than silently rendering
+	// at the wrong width. If we ever support more widths, this is the
+	// one place to extend.
+	if c.PaperWidthMM != 58 && c.PaperWidthMM != 80 {
+		return fmt.Errorf("config: paper_width_mm %d invalid (want 58 or 80)", c.PaperWidthMM)
 	}
 	return nil
 }

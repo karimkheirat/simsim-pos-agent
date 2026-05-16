@@ -60,14 +60,17 @@ func hamoudReceipt(t *testing.T) Receipt {
 	}
 }
 
-func TestRender_HamoudGolden(t *testing.T) {
-	r := hamoudReceipt(t)
-	got, err := Render(r, RenderOptions{OpenDrawerAfter: true})
+// renderGolden is a shared helper: runs Render with the given options,
+// compares the output against the named golden file under testdata/.
+// Use the -update flag to regenerate (re-run without -update to confirm).
+func renderGolden(t *testing.T, r Receipt, opts RenderOptions, goldenName string) {
+	t.Helper()
+	got, err := Render(r, opts)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 
-	goldenPath := filepath.Join("testdata", "golden_hamoud_receipt.bin")
+	goldenPath := filepath.Join("testdata", goldenName)
 	if *update {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatalf("mkdir testdata: %v", err)
@@ -88,15 +91,92 @@ func TestRender_HamoudGolden(t *testing.T) {
 	}
 }
 
-func TestRender_LineWidths(t *testing.T) {
+func TestRender_HamoudGolden(t *testing.T) {
+	// Pre-A.5a baseline: 80mm + cut. The RenderOptions zero value for
+	// PaperWidthMM defaults to 80 (back-compat), but pass explicitly
+	// here for clarity — and pin CutSupported: true to lock the
+	// pre-A.5a cut-emission behavior the golden was generated against.
+	renderGolden(t, hamoudReceipt(t),
+		RenderOptions{OpenDrawerAfter: true, PaperWidthMM: 80, CutSupported: true},
+		"golden_hamoud_receipt.bin")
+}
+
+func TestRender_HamoudGolden_58mm(t *testing.T) {
+	// M13 A.5a — 58mm-paper render of the same fixture. Same fixture
+	// + drawer + cut, only the column widths shift. Golden file
+	// regenerable via `go test -run TestRender_HamoudGolden_58mm -update`.
+	renderGolden(t, hamoudReceipt(t),
+		RenderOptions{OpenDrawerAfter: true, PaperWidthMM: 58, CutSupported: true},
+		"golden_hamoud_receipt_58mm.bin")
+}
+
+func TestRender_HamoudGolden_NoCut(t *testing.T) {
+	// M13 A.5a — 80mm-paper render with CutSupported=false. Used for
+	// manual-tear printers (rare in Algeria-realistic pilot hardware,
+	// but the spec mandates the path). Output should contain extra
+	// feed lines (8 instead of 4+cut) and NO GS V 0 byte sequence.
+	renderGolden(t, hamoudReceipt(t),
+		RenderOptions{OpenDrawerAfter: true, PaperWidthMM: 80, CutSupported: false},
+		"golden_hamoud_receipt_nocut.bin")
+}
+
+func TestRender_LineWidths_80mm(t *testing.T) {
 	r := hamoudReceipt(t)
-	got, err := Render(r, RenderOptions{})
+	got, err := Render(r, RenderOptions{PaperWidthMM: 80, CutSupported: true})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	for i, line := range strings.Split(extractText(got), "\n") {
-		if len(line) > receiptWidth {
-			t.Errorf("output line %d exceeds %d cols (got %d): %q", i, receiptWidth, len(line), line)
+		if len(line) > widths80mm.receipt {
+			t.Errorf("output line %d exceeds %d cols (got %d): %q", i, widths80mm.receipt, len(line), line)
+		}
+	}
+}
+
+func TestRender_LineWidths_58mm(t *testing.T) {
+	r := hamoudReceipt(t)
+	got, err := Render(r, RenderOptions{PaperWidthMM: 58, CutSupported: true})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for i, line := range strings.Split(extractText(got), "\n") {
+		if len(line) > widths58mm.receipt {
+			t.Errorf("output line %d exceeds %d cols (got %d): %q", i, widths58mm.receipt, len(line), line)
+		}
+	}
+}
+
+func TestRender_NoCut_EmitsExtraFeed_NotCutBytes(t *testing.T) {
+	// CutSupported=false must NOT emit GS V 0 (0x1D 0x56 0x00). The
+	// cut bytes appear in CutSupported=true output; their presence in
+	// the no-cut output is a regression.
+	r := hamoudReceipt(t)
+	got, err := Render(r, RenderOptions{PaperWidthMM: 80, CutSupported: false})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	cutBytes := []byte{0x1D, 0x56, 0x00}
+	if bytes.Contains(got, cutBytes) {
+		t.Errorf("CutSupported=false output contains GS V 0 bytes (cut command) — must not")
+	}
+	// Sanity: CutSupported=true output DOES contain those bytes.
+	withCut, _ := Render(r, RenderOptions{PaperWidthMM: 80, CutSupported: true})
+	if !bytes.Contains(withCut, cutBytes) {
+		t.Errorf("CutSupported=true output missing GS V 0 bytes — render regression")
+	}
+}
+
+func TestRender_PaperWidthZero_DefaultsTo80(t *testing.T) {
+	// Defence-in-depth: a misconfigured caller passing PaperWidthMM=0
+	// (zero value) must produce 80mm output, not panic.
+	r := hamoudReceipt(t)
+	got, err := Render(r, RenderOptions{CutSupported: true})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for i, line := range strings.Split(extractText(got), "\n") {
+		if len(line) > widths80mm.receipt {
+			t.Errorf("output line %d exceeds 80mm width (got %d): %q — zero width should default to 80mm", i, len(line), line)
 		}
 	}
 }
