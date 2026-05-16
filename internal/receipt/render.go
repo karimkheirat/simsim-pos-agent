@@ -10,33 +10,83 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 )
 
-// Layout constants for 80mm thermal paper at single-size font. Widths
-// are measured in display columns (runes), not UTF-8 bytes.
-const (
-	receiptWidth  = 42
-	nameColWidth  = 24
-	qtyColWidth   = 8
-	totalColWidth = 10 // 24 + 8 + 10 = 42
+// Layout column counts. M13 A.5a — width is no longer a single constant;
+// it's selected per render via RenderOptions.PaperWidthMM.
+//
+// At single-size font:
+//   - 80mm thermal paper → 42 columns (24 name + 8 qty + 10 total)
+//   - 58mm thermal paper → 32 columns (18 name + 6 qty + 8 total)
+//
+// The breakdown for 58mm is the same proportion as 80mm, scaled by
+// 32/42 and rounded to fit (24*32/42 ≈ 18.3, 8*32/42 ≈ 6.1, 10*32/42
+// ≈ 7.6 → use 8 to keep amount column readable). Sums: 18+6+8 = 32. ✓
+//
+// All values are in display COLUMNS (runes), not UTF-8 bytes.
+type widthSet struct {
+	receipt int // line width
+	name    int // formatLine: name column
+	qty     int // formatLine: qty column
+	total   int // formatLine: total column
+}
+
+var (
+	widths80mm = widthSet{receipt: 42, name: 24, qty: 8, total: 10}
+	widths58mm = widthSet{receipt: 32, name: 18, qty: 6, total: 8}
 )
+
+// widthsFor returns the column set for the given paper width. Defaults
+// to 80mm for any value other than 58 (the only other supported width
+// in v1). Defaulting to 80mm (not panicking) preserves render success
+// for a misconfigured caller — the agent's config.Validate rejects
+// invalid widths at startup, so this branch is defence-in-depth.
+func widthsFor(paperWidthMM int) widthSet {
+	if paperWidthMM == 58 {
+		return widths58mm
+	}
+	return widths80mm
+}
 
 // ErrInvalidReceipt is returned (wrapped via fmt.Errorf "%w") when a
 // Receipt is missing required fields. Use errors.Is to detect.
 var ErrInvalidReceipt = errors.New("invalid receipt")
 
-// RenderOptions controls side effects appended after the receipt body.
+// RenderOptions controls per-render output knobs. M13 A.5a added
+// PaperWidthMM + CutSupported so a single Render call can target
+// either an 80mm cut-capable printer or a 58mm no-cut printer without
+// changing the function signature.
+//
+// Zero values keep pre-M13 behavior on the happy path:
+//   - PaperWidthMM 0 → defaults to 80 in widthsFor (back-compat)
+//   - CutSupported false BUT the constructor in handlers populates it
+//     from capabilities, so the only code path that hits the zero
+//     value is the "render to a no-cut printer" branch.
+//
+// Callers building options directly (tests) MUST set CutSupported
+// explicitly — see TestRender_NoCut for the no-cut golden.
 type RenderOptions struct {
 	OpenDrawerAfter bool
+
+	// PaperWidthMM is 58 or 80. Zero defaults to 80 (back-compat with
+	// every pre-A.5a caller; new callers wire this from agent config).
+	PaperWidthMM int
+
+	// CutSupported gates the trailing GS V 0 (full cut). When false,
+	// the renderer emits extra feed lines instead so the cashier can
+	// tear the receipt manually.
+	CutSupported bool
 }
 
 // Render serializes a Receipt to an ESC/POS byte stream: init + codepage
-// + body + paper feed + full cut + optional drawer kick. French strings
-// are transcoded to CP858 via escpos.TextCP858; pure-ASCII fixed strings
-// (separators, blank lines) use escpos.Text. Returns ErrInvalidReceipt
-// (wrapped) for malformed input.
+// + body + paper feed + (cut OR extra feed) + optional drawer kick.
+// French strings are transcoded to CP858 via escpos.TextCP858; pure-
+// ASCII fixed strings (separators, blank lines) use escpos.Text.
+// Returns ErrInvalidReceipt (wrapped) for malformed input.
 func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 	if err := validate(r); err != nil {
 		return nil, err
 	}
+
+	w := widthsFor(opts.PaperWidthMM)
 
 	b := escpos.New().Init().Codepage(escpos.CP858)
 
@@ -70,40 +120,40 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 	}
 
 	// Items.
-	b.Text(strings.Repeat("-", receiptWidth) + "\n")
+	b.Text(strings.Repeat("-", w.receipt) + "\n")
 	for _, l := range r.Lines {
-		b.TextCP858(formatLine(l) + "\n")
+		b.TextCP858(formatLine(l, w) + "\n")
 	}
 
 	// Top-level discounts (separate section per spec §7).
 	if len(r.Discounts) > 0 {
-		b.Text(strings.Repeat("-", receiptWidth) + "\n")
+		b.Text(strings.Repeat("-", w.receipt) + "\n")
 		for _, d := range r.Discounts {
-			b.TextCP858(formatTotalLine(d.Label, d.Amount) + "\n")
+			b.TextCP858(formatTotalLine(d.Label, d.Amount, w.receipt) + "\n")
 		}
 	}
 
 	// Totals.
-	b.Text(strings.Repeat("-", receiptWidth) + "\n")
-	b.TextCP858(formatTotalLine("Sous-total", r.Totals.Subtotal) + "\n")
+	b.Text(strings.Repeat("-", w.receipt) + "\n")
+	b.TextCP858(formatTotalLine("Sous-total", r.Totals.Subtotal, w.receipt) + "\n")
 	if r.Totals.DiscountTotal != 0 {
-		b.TextCP858(formatTotalLine("Remise", r.Totals.DiscountTotal) + "\n")
+		b.TextCP858(formatTotalLine("Remise", r.Totals.DiscountTotal, w.receipt) + "\n")
 	}
 	if r.Totals.TaxTotal != 0 {
-		b.TextCP858(formatTotalLine("TVA", r.Totals.TaxTotal) + "\n")
+		b.TextCP858(formatTotalLine("TVA", r.Totals.TaxTotal, w.receipt) + "\n")
 	}
 	// Grand total — double-height. LF placed outside the double-height
 	// scope to keep the line feed at normal advance.
 	b.DoubleHeight(true).
-		TextCP858(formatGrandTotalLine("Total", r.Totals.GrandTotal, r.Currency)).
+		TextCP858(formatGrandTotalLine("Total", r.Totals.GrandTotal, r.Currency, w.receipt)).
 		DoubleHeight(false).
 		Text("\n")
 
 	// Payment block. v1 supports cash only.
 	b.Text("\n")
 	if r.Payment.Method == "cash" {
-		b.TextCP858(formatTotalLine("Espèces", r.Payment.Tendered) + "\n")
-		b.TextCP858(formatTotalLine("Rendu", r.Payment.Change) + "\n")
+		b.TextCP858(formatTotalLine("Espèces", r.Payment.Tendered, w.receipt) + "\n")
+		b.TextCP858(formatTotalLine("Rendu", r.Payment.Change, w.receipt) + "\n")
 	} else {
 		b.TextCP858("Paiement: " + r.Payment.Method + "\n")
 	}
@@ -117,8 +167,21 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 		b.Align(escpos.Left)
 	}
 
-	// Final feed + cut + optional drawer.
-	b.Text("\n\n\n\n").CutFull()
+	// Final feed + cut/no-cut + optional drawer.
+	//
+	// Cut-supported (default for SP-331, TM-T20, etc.) — 4 feed lines
+	// to clear the print head + GS V 0 full cut. Matches pre-A.5a
+	// behavior exactly; golden_hamoud_receipt.bin still passes.
+	//
+	// Cut-unsupported (manual-tear printers) — 8 feed lines (no cut)
+	// so the cashier has visible perforation distance to tear the
+	// receipt cleanly. 8 lines is roughly the receipt-paper standoff
+	// + tear-bar offset on common Algeria-realistic no-cut models.
+	if opts.CutSupported {
+		b.Text("\n\n\n\n").CutFull()
+	} else {
+		b.Text("\n\n\n\n\n\n\n\n")
+	}
 	if opts.OpenDrawerAfter {
 		b.DrawerKick()
 	}
@@ -160,20 +223,20 @@ func formatDate(t time.Time) string {
 	return t.Format("02/01/2006  15:04")
 }
 
-// formatLine lays out an item line in three fixed-width columns:
-// name (24, left), qty (8, centered), line_total (10, right) = 42 cols.
-func formatLine(l Line) string {
-	name := truncatePad(l.Name, nameColWidth)
-	qty := centerPad(fmt.Sprintf("%d", l.Qty), qtyColWidth)
-	total := rightAlign(formatAmount(l.LineTotal), totalColWidth)
+// formatLine lays out an item line in three fixed-width columns per the
+// supplied widthSet. Pre-A.5a was hardcoded to 24/8/10 = 42 (80mm).
+func formatLine(l Line, w widthSet) string {
+	name := truncatePad(l.Name, w.name)
+	qty := centerPad(fmt.Sprintf("%d", l.Qty), w.qty)
+	total := rightAlign(formatAmount(l.LineTotal), w.total)
 	return name + qty + total
 }
 
-// formatTotalLine lays out "label" + spaces + "amount" filling receiptWidth
+// formatTotalLine lays out "label" + spaces + "amount" filling width
 // display columns (rune-counted, so French diacritics align correctly).
-func formatTotalLine(label string, amount float64) string {
+func formatTotalLine(label string, amount float64, width int) string {
 	a := formatAmount(amount)
-	pad := receiptWidth - utf8.RuneCountInString(label) - utf8.RuneCountInString(a)
+	pad := width - utf8.RuneCountInString(label) - utf8.RuneCountInString(a)
 	if pad < 1 {
 		pad = 1
 	}
@@ -181,9 +244,9 @@ func formatTotalLine(label string, amount float64) string {
 }
 
 // formatGrandTotalLine appends " <currency>" to the amount on the grand-total line.
-func formatGrandTotalLine(label string, amount float64, currency string) string {
+func formatGrandTotalLine(label string, amount float64, currency string, width int) string {
 	a := formatAmount(amount) + " " + currency
-	pad := receiptWidth - utf8.RuneCountInString(label) - utf8.RuneCountInString(a)
+	pad := width - utf8.RuneCountInString(label) - utf8.RuneCountInString(a)
 	if pad < 1 {
 		pad = 1
 	}

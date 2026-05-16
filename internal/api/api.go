@@ -50,6 +50,12 @@ type Config struct {
 	// IdempotencySweepInterval controls how often the janitor goroutine
 	// removes expired entries. Defaults to 5min. Exposed for tests.
 	IdempotencySweepInterval time.Duration
+
+	// PaperWidthMM is the thermal paper width (58 or 80) the renderer
+	// formats receipts for, and the value reported via GET /capabilities.
+	// Added in M13 A.5a. Defaults to 80 when zero (back-compat with
+	// pre-A.5a constructions of api.Config — e.g. older tests).
+	PaperWidthMM int
 }
 
 // Server holds the assembled HTTP handler chain and its dependencies.
@@ -79,6 +85,13 @@ func New(cfg Config, p printer.Printer) (*Server, error) {
 	if cfg.IdempotencySweepInterval == 0 {
 		cfg.IdempotencySweepInterval = defaultIdempotencySweepInterval
 	}
+	// M13 A.5a — back-compat default. Tests constructing api.Config
+	// directly without PaperWidthMM (pre-A.5a era) get 80mm; the
+	// production main wires this from the validated config.Config
+	// loader, which rejects invalid values.
+	if cfg.PaperWidthMM == 0 {
+		cfg.PaperWidthMM = 80
+	}
 
 	s := &Server{
 		cfg:     cfg,
@@ -103,6 +116,13 @@ func New(cfg Config, p printer.Printer) (*Server, error) {
 	// working until A.3 removes it (once the web client has cut over).
 	mux.HandleFunc("POST /print", s.requireAuth(s.handlePrint))
 	mux.HandleFunc("POST /test-print", s.requireAuth(s.handleTestPrint))
+	// M13 A.5a — /capabilities surfaces the printer-feature matrix
+	// (paper width, cut, drawer, barcode types) the web client uses to
+	// gate UI affordances. JWT-authed via requireAuth (same gate as
+	// /print). Not on the legacy X-Terminal-Token path — /capabilities
+	// is post-handshake, the web client always has a JWT before
+	// touching it.
+	mux.HandleFunc("GET /capabilities", s.requireAuth(s.handleCapabilities))
 	// /drawer/open + /status are NOT print operations and are out of
 	// the A.1 scope — they stay on the legacy X-Terminal-Token gate.
 	mux.HandleFunc("POST /drawer/open", s.requireTerminalToken(s.handleDrawerOpen))

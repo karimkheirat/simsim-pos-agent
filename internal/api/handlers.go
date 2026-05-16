@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/capabilities"
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 	"github.com/karimkheirat/simsim-pos-agent/internal/receipt"
@@ -115,6 +116,47 @@ func (s *Server) printerHealth() printerHealth {
 	}
 }
 
+// capabilitiesForPrinter returns the PrinterCapabilities for the
+// currently-configured printer, overlaying the agent's configured
+// PaperWidthMM on top of the per-model lookup hint.
+//
+// M13 A.5a — the agent config is the source of truth for paper width
+// (admins override the per-model default in config.json); the lookup
+// table's PaperWidthMM is a hint for admin UI only. Cut + drawer + the
+// barcode/codepage sets remain from the lookup.
+//
+// Returns the fallback capability set when the printer is unconfigured.
+// Callers should gate on `s.printer == nil || s.printer.Name() == ""`
+// BEFORE calling this if they want to surface PRINTER_NOT_CONFIGURED;
+// passing through is correct for /print + /test-print which have
+// their own printer-state checks.
+func (s *Server) capabilitiesForPrinter() capabilities.PrinterCapabilities {
+	var name string
+	if s.printer != nil {
+		name = s.printer.Name()
+	}
+	caps := capabilities.Lookup(name)
+	caps.PaperWidthMM = s.cfg.PaperWidthMM
+	return caps
+}
+
+// handleCapabilities — GET /capabilities. JWT-authed via requireAuth.
+//
+// Returns the PrinterCapabilities for the currently-configured printer,
+// or 503 PRINTER_NOT_CONFIGURED when no printer is bound. The response
+// is wrapped in the standard {ok:true, data:...} envelope; M13 A.5a
+// matches /print + /status (auth-protected endpoints), not /health
+// (the agent-discovery flat shape).
+//
+// Spec: M13_BUILD_SPEC.md §3.A.5 + docs/agent-handshake-protocol.md §3.6.
+func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
+	if s.printer == nil || s.printer.Name() == "" {
+		writeError(w, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured")
+		return
+	}
+	writeOK(w, s.capabilitiesForPrinter())
+}
+
 // printRequest is the body of POST /print.
 type printRequest struct {
 	JobID           string          `json:"job_id"`
@@ -154,7 +196,17 @@ func (s *Server) handlePrint(w http.ResponseWriter, r *http.Request) {
 	// Render before checking printer state — surfaces validation errors
 	// (400) instead of pre-empting them with 503 if the printer is also
 	// unreachable. Cheaper failure first.
-	data, err := receipt.Render(req.Receipt, receipt.RenderOptions{OpenDrawerAfter: req.OpenDrawerAfter})
+	//
+	// M13 A.5a — RenderOptions now carry per-render PaperWidthMM
+	// (from agent config) and CutSupported (from the per-model
+	// capabilities lookup). For an unconfigured printer the capability
+	// fallback applies; the renderer's defaults preserve pre-A.5a
+	// behavior for 80mm + cut.
+	data, err := receipt.Render(req.Receipt, receipt.RenderOptions{
+		OpenDrawerAfter: req.OpenDrawerAfter,
+		PaperWidthMM:    s.cfg.PaperWidthMM,
+		CutSupported:    s.capabilitiesForPrinter().CutSupported,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidReceipt, err.Error())
 		return
@@ -216,7 +268,14 @@ func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := receipt.Render(receiptFixture, receipt.RenderOptions{OpenDrawerAfter: true})
+	// M13 A.5a — /test-print honors the same per-render options as
+	// /print so the cashier's "test print" matches what a real receipt
+	// would look like on the configured printer.
+	data, err := receipt.Render(receiptFixture, receipt.RenderOptions{
+		OpenDrawerAfter: true,
+		PaperWidthMM:    s.cfg.PaperWidthMM,
+		CutSupported:    s.capabilitiesForPrinter().CutSupported,
+	})
 	if err != nil {
 		// Fixture is canonical; render failure is an internal bug.
 		writeError(w, http.StatusInternalServerError, CodeInternal, "render fixture: "+err.Error())

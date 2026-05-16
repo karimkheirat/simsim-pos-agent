@@ -389,6 +389,8 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		Version:        cfg.Version,
 		Logger:         logger,
 		Secrets:        secStore,
+		// M13 A.5a — paper width from validated agent config (58 or 80).
+		PaperWidthMM: cfg.PaperWidthMM,
 	}, p)
 	if err != nil {
 		return nil, err
