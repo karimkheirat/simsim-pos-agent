@@ -1,0 +1,11 @@
+CLS
+SIZE 50 mm,40 mm
+GAP 2 mm,0 mm
+DIRECTION 1
+DENSITY 8
+SPEED 4
+CODEPAGE 1252
+TEXT 10,10,"3",0,1,1,"Tomates Olama"
+TEXT 10,50,"2",0,1,1,"0.480 kg — 96 DZD"
+QRCODE 250,30,"M",4,"A",0,"https://opensimsim.co/r/STK-7821"
+PRINT 1,1
