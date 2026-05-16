@@ -158,7 +158,9 @@ func runCmd(args []string) {
 	logger.Info("simsim-pos-agent starting",
 		"version", cfg.Version,
 		"listen_port", cfg.ListenPort,
-		"printer", cfg.PrinterName,
+		"receipt_printer", cfg.ReceiptPrinterName,
+		"label_printer", cfg.LabelPrinterName,
+		"tspl_dialect", cfg.TSPLDialect,
 		"log_level", cfg.LogLevel,
 		"mode", "foreground",
 	)
@@ -234,7 +236,9 @@ func runAsService() {
 	logger.Info("simsim-pos-agent starting",
 		"version", cfg.Version,
 		"listen_port", cfg.ListenPort,
-		"printer", cfg.PrinterName,
+		"receipt_printer", cfg.ReceiptPrinterName,
+		"label_printer", cfg.LabelPrinterName,
+		"tspl_dialect", cfg.TSPLDialect,
 		"log_level", cfg.LogLevel,
 		"mode", "service",
 	)
@@ -337,7 +341,11 @@ func serviceCmd(args []string) {
 func loadAndOverride(configPath, printerSpec string, port int, logLevel string, heartbeatSeconds int) (config.Config, error) {
 	cfg, loadErr := config.Load(configPath)
 	if printerSpec != "" {
+		// --printer is the legacy CLI flag (sets receipt printer for
+		// back-compat with pre-M13-B operators / scripts). Mirror into
+		// ReceiptPrinterName so the two-printer wiring picks it up.
 		cfg.PrinterName = printerSpec
+		cfg.ReceiptPrinterName = printerSpec
 	}
 	if port != 0 {
 		cfg.ListenPort = port
@@ -367,15 +375,20 @@ type agentRuntime struct {
 // store on success. The api.Config.Secrets field receives that store —
 // no nil-secrets path through this function.
 func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error) {
-	var p printer.Printer
-	if cfg.PrinterName != "" {
-		var err error
-		p, err = printer.New(cfg.PrinterName)
-		if err != nil {
-			return nil, fmt.Errorf("printer %q: %w", cfg.PrinterName, err)
-		}
-	} else {
-		logger.Warn("no printer configured; /print will return PRINTER_NOT_CONFIGURED")
+	// M13 Track B PR 1 — two-printer wiring. ReceiptPrinterName
+	// drives the ESC/POS receipt path; LabelPrinterName drives the
+	// TSPL label path (added in PR 2). Either may be empty.
+	//
+	// Back-compat: config.Load mirrors a legacy `printer_name` into
+	// ReceiptPrinterName, so deployed pre-Track-B agents keep working
+	// without touching their config.json.
+	receiptP, err := newPrinterOrNil(cfg.ReceiptPrinterName, "receipt", logger)
+	if err != nil {
+		return nil, err
+	}
+	labelP, err := newPrinterOrNil(cfg.LabelPrinterName, "label", logger)
+	if err != nil {
+		return nil, err
 	}
 
 	secStore, err := config.NewSecretStore(config.DefaultSecretsPath())
@@ -383,7 +396,7 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		return nil, fmt.Errorf("secrets: %w", err)
 	}
 
-	srv, err := api.New(api.Config{
+	srv, err := api.NewTwo(api.Config{
 		ListenAddr:     "127.0.0.1:" + strconv.Itoa(cfg.ListenPort),
 		AllowedOrigins: cfg.AllowedOrigins,
 		Version:        cfg.Version,
@@ -391,7 +404,9 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		Secrets:        secStore,
 		// M13 A.5a — paper width from validated agent config (58 or 80).
 		PaperWidthMM: cfg.PaperWidthMM,
-	}, p)
+		// M13 Track B PR 1 — TSPL dialect ("standard" or "rongta").
+		TSPLDialect: cfg.TSPLDialect,
+	}, receiptP, labelP)
 	if err != nil {
 		return nil, err
 	}
@@ -399,12 +414,15 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 	rt := &agentRuntime{Server: srv}
 
 	// Heartbeat loop — skip if no cloud configured (e.g. dev/CI agent
-	// with cloud_base_url cleared in config.json).
+	// with cloud_base_url cleared in config.json). v1 heartbeat reports
+	// only the receipt printer's status; label-printer status surfaces
+	// only via /health + /capabilities. Future M13 Track B PR (heartbeat
+	// extension) can split this into two cloud fields.
 	if cfg.CloudBaseURL != "" {
 		rt.Heartbeat = &heartbeat.Loop{
 			Cloud:    cloud.New(cfg.CloudBaseURL, cfg.Version),
 			Secrets:  secStore,
-			Printer:  p,
+			Printer:  receiptP,
 			Logger:   logger,
 			Version:  cfg.Version,
 			Interval: time.Duration(cfg.HeartbeatSeconds) * time.Second,
@@ -414,6 +432,22 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 	}
 
 	return rt, nil
+}
+
+// newPrinterOrNil constructs a printer.Printer from the given spec or
+// returns (nil, nil) when spec is empty (operator has not configured
+// that role). Logs a kind-tagged warning on empty so the operator
+// pulling agent.log sees which role is unconfigured.
+func newPrinterOrNil(spec, kind string, logger *slog.Logger) (printer.Printer, error) {
+	if spec == "" {
+		logger.Warn("no "+kind+" printer configured", "role", kind)
+		return nil, nil
+	}
+	p, err := printer.New(spec)
+	if err != nil {
+		return nil, fmt.Errorf("%s printer %q: %w", kind, spec, err)
+	}
+	return p, nil
 }
 
 // openServiceLog opens (creating dirs as needed) the service-mode log

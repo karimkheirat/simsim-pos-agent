@@ -9,19 +9,25 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/capabilities"
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
+	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 	"github.com/karimkheirat/simsim-pos-agent/internal/receipt"
 	"github.com/karimkheirat/simsim-pos-agent/internal/util"
 )
 
 // healthResponse mirrors POS_AGENT_SPEC.md §5.3. M2 (sub-task A5) wired
 // the real paired/store_id/terminal_id from the secret store.
+//
+// M13 Track B PR 1 — additive Label sibling. Existing `printer` field
+// is the receipt printer (back-compat for pre-B clients); new `label`
+// is null when no label printer is wired, populated when one is.
 type healthResponse struct {
-	OK         bool          `json:"ok"`
-	Version    string        `json:"version"`
-	Paired     bool          `json:"paired"`
-	StoreID    string        `json:"store_id,omitempty"`
-	TerminalID string        `json:"terminal_id,omitempty"`
-	Printer    printerHealth `json:"printer"`
+	OK         bool           `json:"ok"`
+	Version    string         `json:"version"`
+	Paired     bool           `json:"paired"`
+	StoreID    string         `json:"store_id,omitempty"`
+	TerminalID string         `json:"terminal_id,omitempty"`
+	Printer    printerHealth  `json:"printer"`
+	Label      *printerHealth `json:"label,omitempty"`
 }
 
 type printerHealth struct {
@@ -38,7 +44,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := healthResponse{
 		OK:      true,
 		Version: s.cfg.Version,
-		Printer: s.printerHealth(),
+		Printer: s.receiptPrinterHealth(),
+		Label:   s.labelHealth(),
 	}
 	if s.secrets != nil {
 		// Load failures (file IO, decryption error) are reported as
@@ -100,25 +107,47 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Paired:      true,
 		StoreID:     secrets.StoreID,
 		TerminalID:  secrets.TerminalID,
-		Printer:     s.printerHealth(),
+		Printer:     s.receiptPrinterHealth(),
 		LastPrintAt: lastPrintAt,
 	})
 }
 
-func (s *Server) printerHealth() printerHealth {
-	if s.printer == nil || s.printer.Name() == "" {
+// receiptPrinterHealth reports the receipt (ESC/POS) printer's status.
+// M13 Track B PR 1 — renamed from printerHealth as part of the
+// two-printer split; labelHealth is the counterpart for the TSPL
+// label printer.
+func (s *Server) receiptPrinterHealth() printerHealth {
+	return statusFor(s.receiptPrinter)
+}
+
+// labelHealth reports the TSPL label printer's status, or nil when no
+// label printer is configured. Returned via the additive `label` key
+// in /health (omitempty drops the nil for back-compat).
+func (s *Server) labelHealth() *printerHealth {
+	if s.labelPrinter == nil || s.labelPrinter.Name() == "" {
+		return nil
+	}
+	h := statusFor(s.labelPrinter)
+	return &h
+}
+
+// statusFor is the shared shape used by receiptPrinterHealth and
+// labelHealth. Returns the zero printerHealth (configured=false) for
+// a nil or unnamed printer; otherwise reports Reachable + Name.
+func statusFor(p printer.Printer) printerHealth {
+	if p == nil || p.Name() == "" {
 		return printerHealth{}
 	}
 	return printerHealth{
 		Configured: true,
-		Reachable:  s.printer.IsReachable(),
-		Name:       s.printer.Name(),
+		Reachable:  p.IsReachable(),
+		Name:       p.Name(),
 	}
 }
 
 // capabilitiesForPrinter returns the PrinterCapabilities for the
-// currently-configured printer, overlaying the agent's configured
-// PaperWidthMM on top of the per-model lookup hint.
+// currently-configured RECEIPT printer, overlaying the agent's
+// configured PaperWidthMM on top of the per-model lookup hint.
 //
 // M13 A.5a — the agent config is the source of truth for paper width
 // (admins override the per-model default in config.json); the lookup
@@ -126,35 +155,109 @@ func (s *Server) printerHealth() printerHealth {
 // barcode/codepage sets remain from the lookup.
 //
 // Returns the fallback capability set when the printer is unconfigured.
-// Callers should gate on `s.printer == nil || s.printer.Name() == ""`
+// Callers should gate on `s.receiptPrinter == nil || s.receiptPrinter.Name() == ""`
 // BEFORE calling this if they want to surface PRINTER_NOT_CONFIGURED;
 // passing through is correct for /print + /test-print which have
 // their own printer-state checks.
 func (s *Server) capabilitiesForPrinter() capabilities.PrinterCapabilities {
 	var name string
-	if s.printer != nil {
-		name = s.printer.Name()
+	if s.receiptPrinter != nil {
+		name = s.receiptPrinter.Name()
 	}
 	caps := capabilities.Lookup(name)
 	caps.PaperWidthMM = s.cfg.PaperWidthMM
 	return caps
 }
 
+// labelCapabilities is the wire-shape extension of the per-model TSPL
+// capabilities row with the agent's tspl_dialect choice attached. The
+// web client uses dialect to mirror the agent's EAN-13 hyphen choice
+// in any preview UI.
+type labelCapabilities struct {
+	capabilities.PrinterCapabilities
+	TSPLDialect string `json:"tspl_dialect"`
+}
+
+// capabilitiesForLabelPrinter returns the labelCapabilities for the
+// currently-configured LABEL printer. Returns nil when no label
+// printer is wired (sibling key in the additive /capabilities shape
+// becomes null per the additive contract — Q2 decision).
+func (s *Server) capabilitiesForLabelPrinter() *labelCapabilities {
+	if s.labelPrinter == nil || s.labelPrinter.Name() == "" {
+		return nil
+	}
+	caps := capabilities.LookupLabel(s.labelPrinter.Name())
+	return &labelCapabilities{
+		PrinterCapabilities: caps,
+		TSPLDialect:         s.cfg.TSPLDialect,
+	}
+}
+
+// capabilitiesResponse is the wire shape of GET /capabilities's data
+// payload. M13 Track B PR 1 additive shape (Q2 decision):
+//   - All pre-existing receipt fields stay at the top level for
+//     back-compat with pre-B web clients (they unmarshal the row
+//     directly into PrinterCapabilities).
+//   - A new `label` sibling carries the TSPL label printer's caps,
+//     or null if none is wired.
+//
+// Pre-B clients that ignore unknown keys (the standard JSON behaviour)
+// see the original shape unchanged. Post-B clients that know to look
+// for `label` get the extended view.
+type capabilitiesResponse struct {
+	capabilities.PrinterCapabilities
+	Label *labelCapabilities `json:"label"`
+}
+
 // handleCapabilities — GET /capabilities. JWT-authed via requireAuth.
 //
-// Returns the PrinterCapabilities for the currently-configured printer,
-// or 503 PRINTER_NOT_CONFIGURED when no printer is bound. The response
-// is wrapped in the standard {ok:true, data:...} envelope; M13 A.5a
-// matches /print + /status (auth-protected endpoints), not /health
-// (the agent-discovery flat shape).
+// Returns the PrinterCapabilities for the currently-configured RECEIPT
+// printer + the additive `label` sibling for the configured label
+// printer (null when no label printer is wired). Returns 503
+// PRINTER_NOT_CONFIGURED when NO receipt printer is bound — a label-
+// only deployment isn't a valid v1 shape (receipt is the primary
+// surface; label is optional).
 //
 // Spec: M13_BUILD_SPEC.md §3.A.5 + docs/agent-handshake-protocol.md §3.6.
+// M13 Track B PR 1 — additive label sibling per Q2 decision.
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
-	if s.printer == nil || s.printer.Name() == "" {
+	if s.receiptPrinter == nil || s.receiptPrinter.Name() == "" {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured")
 		return
 	}
-	writeOK(w, s.capabilitiesForPrinter())
+	writeOK(w, capabilitiesResponse{
+		PrinterCapabilities: s.capabilitiesForPrinter(),
+		Label:               s.capabilitiesForLabelPrinter(),
+	})
+}
+
+// printerForIntent returns the printer for the requested intent and a
+// status / error tuple suitable for HTTP responses when the requested
+// printer is not configured.
+//
+// Intents:
+//   - "receipt" (default) → s.receiptPrinter, 503 PRINTER_NOT_CONFIGURED on absence
+//   - "label"             → s.labelPrinter,   503 NO_LABEL_PRINTER_CONFIGURED on absence
+//
+// Unknown intent strings collapse to "receipt" — defensive default
+// matching the pre-Track-B behaviour.
+//
+// Callers receive printer, http status, error code, error message;
+// `p` is nil when status > 0 (caller should writeError with the
+// returned status/code/message and return).
+func (s *Server) printerForIntent(intent string) (p printer.Printer, status int, code, message string) {
+	switch intent {
+	case "label":
+		if s.labelPrinter == nil || s.labelPrinter.Name() == "" {
+			return nil, http.StatusServiceUnavailable, CodeNoLabelPrinterConfigured, "no label printer configured"
+		}
+		return s.labelPrinter, 0, "", ""
+	default: // "receipt", "", anything else
+		if s.receiptPrinter == nil || s.receiptPrinter.Name() == "" {
+			return nil, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured"
+		}
+		return s.receiptPrinter, 0, "", ""
+	}
 }
 
 // printRequest is the body of POST /print.
@@ -212,17 +315,17 @@ func (s *Server) handlePrint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.printer == nil {
+	if s.receiptPrinter == nil {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured")
 		return
 	}
-	if !s.printer.IsReachable() {
+	if !s.receiptPrinter.IsReachable() {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterOffline, "printer not reachable")
 		return
 	}
 
 	start := time.Now()
-	if err := s.printer.Print(req.JobID, data); err != nil {
+	if err := s.receiptPrinter.Print(req.JobID, data); err != nil {
 		writeError(w, http.StatusInternalServerError, CodePrintFailed, err.Error())
 		return
 	}
@@ -258,12 +361,35 @@ func (s *Server) handlePrint(w http.ResponseWriter, r *http.Request) {
 
 // handleTestPrint renders the M1 fixture and prints it. open_drawer_after
 // defaults to true so the cash-drawer kick path is exercised.
+//
+// M13 Track B PR 1 — accepts ?intent=receipt|label. Default (receipt)
+// renders the M1 ESC/POS fixture and prints to the receipt printer
+// (existing behaviour, byte-identical). intent=label is reserved for
+// PR 2 (label test-print pipeline); for PR 1 it returns 501 to surface
+// the not-yet-implemented contract without ever sending random bytes
+// to a label printer.
 func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
-	if s.printer == nil {
-		writeError(w, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured")
+	intent := r.URL.Query().Get("intent")
+	if intent == "" {
+		intent = "receipt"
+	}
+
+	if intent == "label" {
+		// Label test-print pipeline ships in M13 Track B PR 2 alongside
+		// the /print-label endpoint and the renderable label fixtures.
+		// Until then, surface the contract intent without producing
+		// random TSPL bytes (which a misconfigured printer might
+		// interpret as a setup command).
+		writeError(w, http.StatusNotImplemented, CodeInternal, "intent=label not implemented in PR 1 (ships PR 2)")
 		return
 	}
-	if !s.printer.IsReachable() {
+
+	p, status, code, message := s.printerForIntent(intent)
+	if status != 0 {
+		writeError(w, status, code, message)
+		return
+	}
+	if !p.IsReachable() {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterOffline, "printer not reachable")
 		return
 	}
@@ -283,7 +409,7 @@ func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	if err := s.printer.Print("test-print", data); err != nil {
+	if err := p.Print("test-print", data); err != nil {
 		writeError(w, http.StatusInternalServerError, CodePrintFailed, err.Error())
 		return
 	}
@@ -296,6 +422,7 @@ func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
 	})
 
 	s.logger.Info("test-print success",
+		"intent", intent,
 		"bytes", len(data),
 		"duration_ms", duration.Milliseconds(),
 	)
@@ -303,11 +430,11 @@ func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
 
 // handleDrawerOpen sends a single ESC p pulse via the printer transport.
 func (s *Server) handleDrawerOpen(w http.ResponseWriter, r *http.Request) {
-	if s.printer == nil {
+	if s.receiptPrinter == nil {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterNotConfigured, "no printer configured")
 		return
 	}
-	if !s.printer.IsReachable() {
+	if !s.receiptPrinter.IsReachable() {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterOffline, "printer not reachable")
 		return
 	}
@@ -319,7 +446,7 @@ func (s *Server) handleDrawerOpen(w http.ResponseWriter, r *http.Request) {
 	}
 	jobName := "drawer-kick-" + id
 
-	if err := s.printer.Print(jobName, escpos.DrawerKick()); err != nil {
+	if err := s.receiptPrinter.Print(jobName, escpos.DrawerKick()); err != nil {
 		writeError(w, http.StatusInternalServerError, CodeDrawerFailed, err.Error())
 		return
 	}

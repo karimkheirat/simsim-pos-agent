@@ -181,6 +181,129 @@ func TestValidate_InvalidFields(t *testing.T) {
 	}
 }
 
+// ── M13 Track B PR 1 — two-printer fields + tspl_dialect + back-compat ──
+
+func TestDefaults_TwoPrinterFields(t *testing.T) {
+	c := Defaults()
+	if c.ReceiptPrinterName != "" {
+		t.Errorf("ReceiptPrinterName = %q, want empty", c.ReceiptPrinterName)
+	}
+	if c.LabelPrinterName != "" {
+		t.Errorf("LabelPrinterName = %q, want empty", c.LabelPrinterName)
+	}
+	if c.TSPLDialect != "standard" {
+		t.Errorf("TSPLDialect = %q, want standard", c.TSPLDialect)
+	}
+}
+
+func TestLoad_BackCompat_LegacyPrinterNameMaps(t *testing.T) {
+	// Pre-M13-B deployed configs only set printer_name; that value
+	// must be mirrored into receipt_printer_name so the agent keeps
+	// driving the receipt printer.
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(path, []byte(`{"printer_name": "SP-331"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PrinterName != "SP-331" {
+		t.Errorf("PrinterName = %q, want SP-331", cfg.PrinterName)
+	}
+	if cfg.ReceiptPrinterName != "SP-331" {
+		t.Errorf("ReceiptPrinterName = %q, want SP-331 (back-compat)", cfg.ReceiptPrinterName)
+	}
+}
+
+func TestLoad_BackCompat_NewFieldWinsOverLegacy(t *testing.T) {
+	// If the operator set BOTH the new field AND the legacy field,
+	// the explicit new field wins. Pins the Q1 decision.
+	path := filepath.Join(t.TempDir(), "both.json")
+	body := `{"printer_name": "legacy-name", "receipt_printer_name": "new-name"}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReceiptPrinterName != "new-name" {
+		t.Errorf("ReceiptPrinterName = %q, want new-name (new field wins)", cfg.ReceiptPrinterName)
+	}
+}
+
+func TestLoad_TwoPrinterConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "two-printer.json")
+	body := `{
+		"receipt_printer_name": "Star SP-331",
+		"label_printer_name": "Xprinter XP-DT426B",
+		"tspl_dialect": "standard"
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReceiptPrinterName != "Star SP-331" {
+		t.Errorf("ReceiptPrinterName = %q, want Star SP-331", cfg.ReceiptPrinterName)
+	}
+	if cfg.LabelPrinterName != "Xprinter XP-DT426B" {
+		t.Errorf("LabelPrinterName = %q, want Xprinter XP-DT426B", cfg.LabelPrinterName)
+	}
+	if cfg.TSPLDialect != "standard" {
+		t.Errorf("TSPLDialect = %q, want standard", cfg.TSPLDialect)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestLoad_RongtaDialect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rongta.json")
+	body := `{"label_printer_name": "Rongta RP-410", "tspl_dialect": "rongta"}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TSPLDialect != "rongta" {
+		t.Errorf("TSPLDialect = %q, want rongta", cfg.TSPLDialect)
+	}
+	if err := Validate(cfg); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestValidate_InvalidTSPLDialect(t *testing.T) {
+	tests := []struct {
+		name    string
+		dialect string
+	}{
+		{"empty string", ""},
+		{"typo", "stanard"},
+		{"random", "zpl"},
+		{"upper case (case-sensitive)", "STANDARD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Defaults()
+			c.TSPLDialect = tt.dialect
+			err := Validate(c)
+			if err == nil {
+				t.Fatalf("expected error for %q, got nil", tt.dialect)
+			}
+			if !strings.Contains(err.Error(), "tspl_dialect") {
+				t.Errorf("err = %q; want substring tspl_dialect", err.Error())
+			}
+		})
+	}
+}
+
 func TestDefaultConfigPath(t *testing.T) {
 	got := DefaultConfigPath()
 	if runtime.GOOS == "windows" {

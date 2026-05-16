@@ -96,6 +96,15 @@ var (
 	defaultCodepages = []string{"CP858"}
 )
 
+// Default barcode + codepage sets for TSPL label printers. CP1252
+// is the TSPL2 default codepage; QR + CODE128 + EAN13 are all
+// standard-TSPL2 commands supported by every model in
+// docs/printer-compatibility.md §3.
+var (
+	defaultLabelBarcodes  = []string{"CODE128", "EAN13", "QR"}
+	defaultLabelCodepages = []string{"CP1252"}
+)
+
 // modelEntry pairs a case-insensitive substring with a factory for the
 // capabilities returned when a printer's Name() matches. Entries are
 // matched in declaration order — MOST SPECIFIC FIRST (e.g., "RP-332"
@@ -208,4 +217,105 @@ func Lookup(printerName string) PrinterCapabilities {
 		}
 	}
 	return fallbackCaps()
+}
+
+// labelModelTable is the TSPL label-printer counterpart of modelTable.
+// Substring matching is case-insensitive; most-specific entries come
+// first (e.g. xp-dt426b before xp-dt426).
+//
+// Sourced from docs/printer-compatibility.md §3 in the web repo:
+//   - Rongta:   RP-410, RP-420, RP-426A
+//   - Xprinter: XP-DT426B, XP-DT108B, XP-470B
+//   - Aclas:    PP7X, PP8X
+//   - TSC:      TDP-244, TTP-244 Pro
+//
+// All v1 entries report identical TSPL caps: 60mm width, NO cut, NO
+// drawer (label printers don't ship cash drawers), CODE128 + EAN13 +
+// QR, CP1252. Structure mirrors modelTable so per-model differences
+// can be one-line factories in v2.
+var labelModelTable = []modelEntry{
+	// ── Rongta — RP-426A before RP-420 (substring order is irrelevant
+	// here since "rp-420" is not a substring of "rp-426a", but kept
+	// most-specific-first to match the receipt table convention) ──
+	{substring: "rp-426a", factory: defaultLabelModelCaps},
+	{substring: "rp-420", factory: defaultLabelModelCaps},
+	{substring: "rp-410", factory: defaultLabelModelCaps},
+
+	// ── Xprinter — XP-DT426B before XP-DT108B before XP-470B ──
+	{substring: "xp-dt426b", factory: defaultLabelModelCaps},
+	{substring: "xp-dt108b", factory: defaultLabelModelCaps},
+	{substring: "xp-470b", factory: defaultLabelModelCaps},
+
+	// ── Aclas — PP7X / PP8X ─────────────────────────────────────
+	{substring: "pp8x", factory: defaultLabelModelCaps},
+	{substring: "pp7x", factory: defaultLabelModelCaps},
+
+	// ── TSC — TTP-244 Pro before TDP-244 ────────────────────────
+	{substring: "ttp-244 pro", factory: defaultLabelModelCaps},
+	{substring: "ttp-244", factory: defaultLabelModelCaps},
+	{substring: "tdp-244", factory: defaultLabelModelCaps},
+}
+
+// defaultLabelModelCaps is the per-model factory for v1 TSPL label
+// printers. Cloning per-call so caller slice mutations stay isolated
+// (matches receiptCaps pattern).
+//
+// Defaults:
+//   - PaperWidthMM: 60     — common 60x40mm label stock
+//   - CutSupported: false  — label printers tear at the gap
+//   - DrawerSupported: false — no cash drawer on label printers
+//   - BarcodeTypes: CODE128 + EAN13 + QR
+//   - Codepages: CP1252 (TSPL2 default)
+//   - QRSupported: true    — TSPL2 native QRCODE command
+//   - Source: model_lookup
+func defaultLabelModelCaps() PrinterCapabilities {
+	return PrinterCapabilities{
+		PaperWidthMM:    60,
+		CutSupported:    false,
+		DrawerSupported: false,
+		BarcodeTypes:    append([]string(nil), defaultLabelBarcodes...),
+		Codepages:       append([]string(nil), defaultLabelCodepages...),
+		QRSupported:     true,
+		Source:          SourceModelLookup,
+	}
+}
+
+// labelFallbackCaps is the TSPL counterpart of fallbackCaps. Same
+// conservative defaults as defaultLabelModelCaps but with Source =
+// SourceFallback so admin UIs can flag low-confidence rows.
+func labelFallbackCaps() PrinterCapabilities {
+	return PrinterCapabilities{
+		PaperWidthMM:    60,
+		CutSupported:    false,
+		DrawerSupported: false,
+		BarcodeTypes:    append([]string(nil), defaultLabelBarcodes...),
+		Codepages:       append([]string(nil), defaultLabelCodepages...),
+		QRSupported:     true,
+		Source:          SourceFallback,
+	}
+}
+
+// LookupLabel returns the PrinterCapabilities for the given TSPL
+// LABEL printer name (NOT a receipt printer — those use Lookup).
+// Matching is case-insensitive substring against labelModelTable
+// entries in order; first match wins. Returns the label-fallback
+// caps for an empty name or no match.
+//
+// The split between Lookup and LookupLabel reflects the two-printer
+// architecture: a pilot deployment has separate ESC/POS receipt and
+// TSPL label printers; each has its own capability profile. The
+// agent's /capabilities response returns the receipt profile at the
+// top level and the label profile under the `label` sibling key
+// (M13 Track B PR 1 additive shape, Q2 decision).
+func LookupLabel(printerName string) PrinterCapabilities {
+	name := strings.ToLower(printerName)
+	if name == "" {
+		return labelFallbackCaps()
+	}
+	for _, entry := range labelModelTable {
+		if strings.Contains(name, entry.substring) {
+			return entry.factory()
+		}
+	}
+	return labelFallbackCaps()
 }

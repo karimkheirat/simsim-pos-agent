@@ -52,7 +52,11 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *printerName != "" {
+		// M13 Track B PR 1 — mirror the installer's --printer flag into
+		// both the legacy and the new receipt-printer field so a fresh
+		// config.json is forward-compatible with the two-printer wiring.
 		cfg.PrinterName = *printerName
+		cfg.ReceiptPrinterName = *printerName
 	}
 	if *cloudBaseURL != "" {
 		cfg.CloudBaseURL = *cloudBaseURL
