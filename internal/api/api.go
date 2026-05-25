@@ -64,6 +64,24 @@ type Config struct {
 	// label sibling so the web client can mirror the choice in any
 	// preview UI.
 	TSPLDialect string
+
+	// CloudReporter is the agent's outbound channel to the cloud's
+	// /api/pos-agent/* endpoints. Used by the M13 print-verification
+	// loopback handler (POST /report-verified) to forward operator-
+	// confirmed test-print outcomes upstream with the agent's stored
+	// terminal token. Nil → /report-verified returns 503; production
+	// main wires this from a cloud.Client shim.
+	CloudReporter CloudReporter
+}
+
+// CloudReporter is the narrow interface the M13 /report-verified
+// handler depends on. Defined in this package (not internal/cloud)
+// so api stays decoupled from the cloud client; production wiring
+// passes a thin adapter, tests pass a fake.
+type CloudReporter interface {
+	ReportPrintVerified(
+		ctx context.Context, token string, verified bool, errorClass string,
+	) error
 }
 
 // Server holds the assembled HTTP handler chain and its dependencies.
@@ -80,6 +98,7 @@ type Server struct {
 	labelPrinter   printer.Printer
 	secrets        config.SecretStore
 	idem           *IdempotencyStore
+	cloud          CloudReporter
 	handler        http.Handler
 }
 
@@ -137,6 +156,7 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 		labelPrinter:   labelPrinter,
 		secrets:        cfg.Secrets,
 		idem:           NewIdempotencyStore(cfg.IdempotencyTTL),
+		cloud:          cfg.CloudReporter,
 	}
 
 	mux := http.NewServeMux()
@@ -158,6 +178,11 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// Same JWT gate (requireAuth); routes to s.labelPrinter; surfaces
 	// 503 NO_LABEL_PRINTER_CONFIGURED when no label printer is wired.
 	mux.HandleFunc("POST /print-label", s.requireAuth(s.handlePrintLabel))
+	// M13 print-verification — /report-verified is the loopback bridge
+	// for operator-confirmed test-print outcomes. JWT-authed. Loads the
+	// agent's stored terminal token from secrets and forwards to the
+	// cloud's /api/pos-agent/print-verified.
+	mux.HandleFunc("POST /report-verified", s.requireAuth(s.handleReportVerified))
 	// M13 A.5a — /capabilities surfaces the printer-feature matrix
 	// (paper width, cut, drawer, barcode types) the web client uses to
 	// gate UI affordances. JWT-authed via requireAuth (same gate as

@@ -39,3 +39,26 @@ PairCodeLabel=On another computer, open Simsim in your browser and generate a pa
 PairCodeInputLabel=Pairing code (6 digits):
 PairCodeSkipCheckbox=I'll pair this register later
 PairCodeValidationError=The code must be exactly 6 digits.
+
+; --- M13 print-verification: printer-picker driver advisory ---
+; %1 = driver name as reported by Get-Printer.
+PrinterPickerDriverWarning=Notice: the current driver for this printer is "%1". For reliable receipt printing, the "Generic / Text Only" driver is recommended. You can proceed; a test print will run at the end of installation.
+
+; --- M13 print-verification: post-pair test-print step ---
+RunStatusTestPrint=Printing a test receipt...
+TestPrintConfirmTitle=Print verification
+; %1 = printer name, %2 = driver name
+TestPrintConfirmBody=A test receipt was just printed.%n%nPrinter: %1%nDriver: %2%n%nDid it print correctly?
+TestPrintConfirmYes=Yes
+TestPrintConfirmNoChooseOther=No — choose another printer
+; %1 = current printer name
+TestPrintFireFailedBody=Failed to send the test print to printer "%1". Verify the printer is powered on and connected, then try again.
+TestPrintRetryPickerCaption=Choose another printer
+TestPrintRetryPickerBody=Select the printer to use for the next test print. The agent will be reconfigured and the service restarted before retrying.
+TestPrintRetryPickerOk=Retry
+TestPrintRetryPickerCancel=Cancel
+TestPrintNoOtherPrinters=No other printers detected. Plug in and install a printer in Windows, then re-run setup.
+
+; --- M13 print-verification: wpFinished suffix ---
+InstallSuccessPrintVerified=✓ Test receipt confirmed by the operator.
+InstallSuccessPrintNotVerified=⚠ Printing was NOT confirmed. Before the first customer receipt, open the Simsim dashboard and run "Print a test receipt" from the terminal page.

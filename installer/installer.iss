@@ -138,6 +138,37 @@ var
   PairedTerminalLabel: String;
   PairFailureReason:   String;
 
+// M13 print-verification — globals capturing the post-pair test-print
+// outcome for wpFinished.
+//
+// PrintVerifyAttempted:
+//   False = the verify step was skipped (pair failed / pair skipped /
+//           wpFinished reached without running ssPostInstall).
+//   True  = the verify step ran (regardless of the outcome). When
+//           True, PrintVerifyConfirmed tells us whether the operator
+//           confirmed Oui.
+// PrintVerifyConfirmed:
+//   True  = operator answered Oui to "Did it print correctly?".
+//           Cloud has the green-status stamp.
+//   False = operator answered Non, hit max retries, or the
+//           test-print pipeline itself failed. Cloud has been told
+//           verified=false (amber/null).
+// PrintVerifyErrorClass: free-form failure tag the cloud logs.
+//   Conventional values match agentctl verify-print's --fail:
+//     OPERATOR_REJECTED, MAX_RETRIES_EXCEEDED, TEST_PRINT_FAILED,
+//     AGENT_UNREACHABLE.
+//
+// wpFinished consumes these three to extend the message text.
+  PrintVerifyAttempted:   Boolean;
+  PrintVerifyConfirmed:   Boolean;
+  PrintVerifyErrorClass:  String;
+
+const
+  // Retry cap on the printer-swap loop. Confirmed at plan-approval
+  // time; sized for an operator with up to ~3 printers to cycle
+  // through, with room for a misclick or two.
+  PRINT_VERIFY_MAX_RETRIES = 5;
+
 // --- {code:...} substitution helpers for [Run] parameters ---
 
 // GetPrinterArg returns the AG3 printer choice for write-config. May be
@@ -230,6 +261,291 @@ begin
   end;
 end;
 
+// --- M13 print-verification helpers ---
+
+// rewritePrinterAndRestartService reconfigures the agent for a new
+// printer name and bounces the Windows service so /test-print picks
+// up the change. Used by the print-verification retry loop when the
+// operator picks a different printer mid-flow.
+//
+// Three Exec calls — write-config, service stop, service start —
+// each waited on synchronously. Failures are logged in the LogLabel
+// caption but don't abort the loop; the operator can still attempt
+// another retry, and the verify-print --fail path covers the
+// terminal failure case.
+function rewritePrinterAndRestartService(NewName: String): Boolean;
+var
+  ResultCode: Integer;
+  AgentExe: String;
+begin
+  AgentExe := ExpandConstant('{app}\bin\agent.exe');
+
+  // 1. Rewrite config.json — empty --printer arg would leave the
+  // existing value, so we always pass NewName explicitly.
+  if not Exec(AgentExe,
+              'write-config --printer "' + NewName + '"',
+              '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+
+  // 2. Stop the service. SC may return non-zero if the service is
+  // already stopped — tolerate it; the start step is what matters.
+  Exec(AgentExe, 'service stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // 3. Start fresh. THIS one must succeed — the operator's next
+  // /test-print needs a running agent with the new printer wired.
+  if not Exec(AgentExe, 'service start', '', SW_HIDE,
+              ewWaitUntilTerminated, ResultCode) then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if ResultCode <> 0 then
+  begin
+    Result := False;
+    Exit;
+  end;
+  // Give the service a moment to spin up its loopback listener
+  // before the next /test-print attempt.
+  Sleep(2000);
+  Result := True;
+end;
+
+// askPickAnotherPrinter shows a dialog with the available printers
+// and lets the operator pick a different one. Returns the chosen
+// name on Oui, '' on Cancel.
+//
+// Uses Inno's stock InputQuery via SelectFromList isn't bundled —
+// we reuse `detectPrinters` and present the list as a hand-rolled
+// modal dialog through a TForm. Kept compact: this surface only
+// fires when the operator answers Non to the verify dialog, which
+// is the off-path. Most pilots clear on Oui first attempt.
+function askPickAnotherPrinter(CurrentPrinter: String): String;
+var
+  F: TSetupForm;
+  Combo: TNewComboBox;
+  OkBtn, CancelBtn: TNewButton;
+  Names: TArrayOfString;
+  DetectionFailed: Boolean;
+  i, defaultIdx: Integer;
+  Lbl: TLabel;
+begin
+  Result := '';
+  Names := detectPrinters(DetectionFailed);
+  if DetectionFailed or (GetArrayLength(Names) = 0) then
+  begin
+    MsgBox(ExpandConstant('{cm:TestPrintNoOtherPrinters}'), mbInformation, MB_OK);
+    Exit;
+  end;
+
+  F := CreateCustomForm;
+  try
+    F.Caption := ExpandConstant('{cm:TestPrintRetryPickerCaption}');
+    F.ClientWidth := ScaleX(420);
+    F.ClientHeight := ScaleY(180);
+    F.Position := poOwnerFormCenter;
+
+    Lbl := TLabel.Create(F);
+    Lbl.Parent := F;
+    Lbl.Caption := ExpandConstant('{cm:TestPrintRetryPickerBody}');
+    Lbl.Left := ScaleX(16);
+    Lbl.Top := ScaleY(16);
+    Lbl.Width := ScaleX(388);
+    Lbl.Height := ScaleY(40);
+    Lbl.WordWrap := True;
+    Lbl.AutoSize := False;
+
+    Combo := TNewComboBox.Create(F);
+    Combo.Parent := F;
+    Combo.Style := csDropDownList;
+    Combo.Left := ScaleX(16);
+    Combo.Top := ScaleY(72);
+    Combo.Width := ScaleX(388);
+    defaultIdx := 0;
+    for i := 0 to GetArrayLength(Names) - 1 do
+    begin
+      Combo.Items.Add(Names[i]);
+      if Names[i] = CurrentPrinter then
+        defaultIdx := i;
+    end;
+    Combo.ItemIndex := defaultIdx;
+
+    OkBtn := TNewButton.Create(F);
+    OkBtn.Parent := F;
+    OkBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerOk}');
+    OkBtn.Left := ScaleX(220);
+    OkBtn.Top := ScaleY(130);
+    OkBtn.Width := ScaleX(90);
+    OkBtn.ModalResult := mrOk;
+
+    CancelBtn := TNewButton.Create(F);
+    CancelBtn.Parent := F;
+    CancelBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerCancel}');
+    CancelBtn.Left := ScaleX(314);
+    CancelBtn.Top := ScaleY(130);
+    CancelBtn.Width := ScaleX(90);
+    CancelBtn.ModalResult := mrCancel;
+
+    if F.ShowModal = mrOk then
+      Result := Combo.Items[Combo.ItemIndex];
+  finally
+    F.Free;
+  end;
+end;
+
+// runVerifyPrintStep is the post-pair print-verification step:
+//   1. agentctl test-print  (canned receipt → printer)
+//   2. Operator dialog: Oui / Non — choisir une autre imprimante
+//   3. On Oui  → agentctl verify-print --ok  → done.
+//   4. On Non  → swap printer + restart service + back to (1),
+//                up to PRINT_VERIFY_MAX_RETRIES times.
+//   5. Operator cancels OR cap hit → agentctl verify-print --fail.
+//
+// All three globals (PrintVerifyAttempted / Confirmed / ErrorClass)
+// are set before this returns; wpFinished consumes them.
+procedure runVerifyPrintStep;
+var
+  Attempts: Integer;
+  AgentctlExe: String;
+  ResultCode: Integer;
+  CurrentPrinter, CurrentDriver, NextPrinter: String;
+  DialogTitle, DialogBody: String;
+  Reply: Integer;
+  ButtonLabels: TArrayOfString;
+begin
+  PrintVerifyAttempted := True;
+  PrintVerifyConfirmed := False;
+  PrintVerifyErrorClass := '';
+
+  AgentctlExe := ExpandConstant('{app}\bin\agentctl.exe');
+  CurrentPrinter := SelectedPrinterName;
+  CurrentDriver := SelectedPrinterDriver;
+
+  Attempts := 0;
+  while Attempts < PRINT_VERIFY_MAX_RETRIES do
+  begin
+    Attempts := Attempts + 1;
+
+    // 1. Fire test print.
+    WizardForm.StatusLabel.Caption := ExpandConstant('{cm:RunStatusTestPrint}');
+    if not Exec(AgentctlExe, 'test-print', '', SW_HIDE,
+                ewWaitUntilTerminated, ResultCode) then
+    begin
+      // agentctl couldn't be launched (process spawn failure). Bail
+      // hard — no point looping.
+      PrintVerifyErrorClass := 'AGENT_UNREACHABLE';
+      Exec(AgentctlExe, 'verify-print --fail AGENT_UNREACHABLE', '',
+           SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exit;
+    end;
+    if ResultCode <> 0 then
+    begin
+      // /test-print returned non-200. Could be printer offline,
+      // PRINTER_NOT_CONFIGURED, etc. Surface a dialog so the operator
+      // can swap printers and try again — the test-print failure
+      // looks indistinguishable from a "Non" answer at this layer.
+      Reply := MsgBox(
+        FmtMessage(ExpandConstant('{cm:TestPrintFireFailedBody}'),
+                   [CurrentPrinter]),
+        mbError,
+        MB_RETRYCANCEL);
+      if Reply <> IDRETRY then
+      begin
+        PrintVerifyErrorClass := 'TEST_PRINT_FAILED';
+        Exec(AgentctlExe, 'verify-print --fail TEST_PRINT_FAILED', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exit;
+      end;
+      // Loop with a swap. If swap fails or operator cancels, we go
+      // to the verify-print --fail branch below.
+      NextPrinter := askPickAnotherPrinter(CurrentPrinter);
+      if NextPrinter = '' then
+      begin
+        PrintVerifyErrorClass := 'TEST_PRINT_FAILED';
+        Exec(AgentctlExe, 'verify-print --fail TEST_PRINT_FAILED', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exit;
+      end;
+      if not rewritePrinterAndRestartService(NextPrinter) then
+      begin
+        PrintVerifyErrorClass := 'TEST_PRINT_FAILED';
+        Exec(AgentctlExe, 'verify-print --fail TEST_PRINT_FAILED', '',
+             SW_HIDE, ewWaitUntilTerminated, ResultCode);
+        Exit;
+      end;
+      CurrentPrinter := NextPrinter;
+      CurrentDriver := detectDriverNameFor(NextPrinter);
+      Continue;
+    end;
+
+    // 2. Test print fired. Ask the operator if it printed correctly.
+    DialogTitle := ExpandConstant('{cm:TestPrintConfirmTitle}');
+    DialogBody := FmtMessage(ExpandConstant('{cm:TestPrintConfirmBody}'),
+                             [CurrentPrinter, CurrentDriver]);
+    // Inno's TaskDialogMsgBox supports custom button labels — we use
+    // it for the Oui / Non-choose-another pair so the dialog matches
+    // the operator's mental model better than a generic Yes/No.
+    SetArrayLength(ButtonLabels, 2);
+    ButtonLabels[0] := ExpandConstant('{cm:TestPrintConfirmYes}');
+    ButtonLabels[1] := ExpandConstant('{cm:TestPrintConfirmNoChooseOther}');
+    Reply := TaskDialogMsgBox(
+      DialogTitle, DialogBody, mbConfirmation, MB_YESNO, ButtonLabels, -1);
+
+    if Reply = IDYES then
+    begin
+      // 3. Oui — operator confirmed. Stamp cloud + exit loop.
+      if not Exec(AgentctlExe, 'verify-print --ok', '', SW_HIDE,
+                  ewWaitUntilTerminated, ResultCode) then
+      begin
+        PrintVerifyErrorClass := 'CLOUD_REPORT_FAILED';
+        Exit;
+      end;
+      if ResultCode <> 0 then
+      begin
+        // Cloud rejected (network failure, auth issue). Don't lose
+        // the operator's Oui — flag explicitly so wpFinished surfaces
+        // "test printed, but cloud confirmation didn't reach Simsim;
+        // retry from the dashboard."
+        PrintVerifyErrorClass := 'CLOUD_REPORT_FAILED';
+        Exit;
+      end;
+      PrintVerifyConfirmed := True;
+      Exit;
+    end;
+
+    // 4. Non — operator wants to swap printers.
+    NextPrinter := askPickAnotherPrinter(CurrentPrinter);
+    if NextPrinter = '' then
+    begin
+      PrintVerifyErrorClass := 'OPERATOR_REJECTED';
+      Exec(AgentctlExe, 'verify-print --fail OPERATOR_REJECTED', '',
+           SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exit;
+    end;
+    if not rewritePrinterAndRestartService(NextPrinter) then
+    begin
+      PrintVerifyErrorClass := 'OPERATOR_REJECTED';
+      Exec(AgentctlExe, 'verify-print --fail OPERATOR_REJECTED', '',
+           SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      Exit;
+    end;
+    CurrentPrinter := NextPrinter;
+    CurrentDriver := detectDriverNameFor(NextPrinter);
+  end;
+
+  // 5. Retry cap hit — neither verified nor explicitly cancelled.
+  PrintVerifyErrorClass := 'MAX_RETRIES_EXCEEDED';
+  Exec(AgentctlExe, 'verify-print --fail MAX_RETRIES_EXCEEDED', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   // ssPostInstall fires after [Files] copy + [Run] entries complete.
@@ -237,7 +553,16 @@ begin
   // already run; if any of them failed, Inno would have rolled back
   // and we wouldn't reach here. Now we run the conditional pair step.
   if (CurStep = ssPostInstall) and not SkipPairing then
+  begin
     runPairStep;
+    // Only attempt print verification when pairing succeeded — there's
+    // no terminal token for the cloud /api/pos-agent/print-verified
+    // call otherwise. wpFinished still surfaces an "install OK, pair
+    // failed" message via buildSuccessMessage; the operator runs the
+    // test print later from the retailer settings page.
+    if PairResultCode = 0 then
+      runVerifyPrintStep;
+  end;
 end;
 
 // buildSuccessMessage chooses the wpFinished label text based on whether
@@ -246,6 +571,7 @@ end;
 function buildSuccessMessage: String;
 var
   Reason: String;
+  Base: String;
 begin
   if SkipPairing then
   begin
@@ -264,7 +590,21 @@ begin
     // continuation line that starts with '[' is read by Inno's
     // preprocessor as an INI section header and fails compile with
     // "Invalid section tag" (this is what broke v0.3.2's CI build).
-    Result := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'), [PairedTerminalLabel, PairedStoreName]);
+    Base := FmtMessage(ExpandConstant('{cm:InstallSuccessPaired}'), [PairedTerminalLabel, PairedStoreName]);
+    // M13 print-verification — append the verification outcome to
+    // the success message. wpFinished is the only post-install
+    // signal the operator sees; surfacing this here is what
+    // prevents the "cashier discovers garbled receipts on first
+    // customer" failure mode.
+    if PrintVerifyAttempted then
+    begin
+      if PrintVerifyConfirmed then
+        Result := Base + #13#10 + ExpandConstant('{cm:InstallSuccessPrintVerified}')
+      else
+        Result := Base + #13#10 + ExpandConstant('{cm:InstallSuccessPrintNotVerified}');
+    end
+    else
+      Result := Base;
     Exit;
   end;
   if PairFailureReason = '' then

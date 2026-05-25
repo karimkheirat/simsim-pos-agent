@@ -35,3 +35,21 @@ type pairRequest struct {
 	AgentVersion string `json:"agent_version"`
 	MachineID    string `json:"machine_id"`
 }
+
+// PrintVerifiedRequest is the body of POST /api/pos-agent/print-verified
+// — operator-confirmed test-print outcome reported back to the cloud.
+//
+//   - Verified=true  → cloud stamps pos_terminals.last_print_verified_at = NOW().
+//   - Verified=false → cloud CLEARS pos_terminals.last_print_verified_at to NULL.
+//     A confirmed bad test print downgrades a previously-verified
+//     terminal — the cloud can no longer assert this terminal prints
+//     correctly.
+//
+// ErrorClass is an optional free-form tag the agent/web client uses to
+// classify the failure mode (e.g. "OPERATOR_REJECTED",
+// "AGENT_UNREACHABLE", "MAX_RETRIES_EXCEEDED"). The cloud logs it for
+// ops visibility but does not branch on its value.
+type PrintVerifiedRequest struct {
+	Verified   bool   `json:"verified"`
+	ErrorClass string `json:"error_class,omitempty"`
+}

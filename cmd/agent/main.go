@@ -396,6 +396,15 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		return nil, fmt.Errorf("secrets: %w", err)
 	}
 
+	// M13 print-verification — share one cloud.Client between the
+	// heartbeat loop (existing) and the api Server's CloudReporter
+	// (new, for /report-verified). When CloudBaseURL is empty (dev/CI
+	// builds), both surfaces gracefully no-op via their nil checks.
+	var cloudClient *cloud.Client
+	if cfg.CloudBaseURL != "" {
+		cloudClient = cloud.New(cfg.CloudBaseURL, cfg.Version)
+	}
+
 	srv, err := api.NewTwo(api.Config{
 		ListenAddr:     "127.0.0.1:" + strconv.Itoa(cfg.ListenPort),
 		AllowedOrigins: cfg.AllowedOrigins,
@@ -406,6 +415,10 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		PaperWidthMM: cfg.PaperWidthMM,
 		// M13 Track B PR 1 — TSPL dialect ("standard" or "rongta").
 		TSPLDialect: cfg.TSPLDialect,
+		// M13 print-verification — forward operator-confirmed test-print
+		// outcomes to the cloud's /api/pos-agent/print-verified. nil
+		// when no cloud is configured; api's defensive 503 surfaces.
+		CloudReporter: cloudReporterAdapter(cloudClient),
 	}, receiptP, labelP)
 	if err != nil {
 		return nil, err
@@ -418,9 +431,9 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 	// only the receipt printer's status; label-printer status surfaces
 	// only via /health + /capabilities. Future M13 Track B PR (heartbeat
 	// extension) can split this into two cloud fields.
-	if cfg.CloudBaseURL != "" {
+	if cloudClient != nil {
 		rt.Heartbeat = &heartbeat.Loop{
-			Cloud:    cloud.New(cfg.CloudBaseURL, cfg.Version),
+			Cloud:    cloudClient,
 			Secrets:  secStore,
 			Printer:  receiptP,
 			Logger:   logger,
@@ -432,6 +445,37 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 	}
 
 	return rt, nil
+}
+
+// cloudReporterAdapter wraps a *cloud.Client into the narrow
+// api.CloudReporter interface. Internal to cmd/agent so internal/api
+// stays free of any dependency on internal/cloud (the interface is
+// declared in api/api.go for test injectability).
+//
+// Returns nil when c is nil — api's defensive 503 covers the
+// "cloud-disabled" deploy mode for /report-verified.
+func cloudReporterAdapter(c *cloud.Client) api.CloudReporter {
+	if c == nil {
+		return nil
+	}
+	return &cloudReporterShim{client: c}
+}
+
+// cloudReporterShim implements api.CloudReporter by forwarding to a
+// concrete *cloud.Client. The shim collapses api's narrow
+// (verified, errorClass) signature back into the cloud client's
+// PrintVerifiedRequest struct so internal/api stays decoupled.
+type cloudReporterShim struct {
+	client *cloud.Client
+}
+
+func (s *cloudReporterShim) ReportPrintVerified(
+	ctx context.Context, token string, verified bool, errorClass string,
+) error {
+	return s.client.ReportPrintVerified(ctx, token, cloud.PrintVerifiedRequest{
+		Verified:   verified,
+		ErrorClass: errorClass,
+	})
 }
 
 // newPrinterOrNil constructs a printer.Printer from the given spec or
