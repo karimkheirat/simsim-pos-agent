@@ -18,9 +18,10 @@ const defaultTimeout = 10 * time.Second
 
 // Endpoint paths, kept centralized so contract drift is one-line obvious.
 const (
-	pathPair      = "/api/pos-agent/pair"
-	pathHeartbeat = "/api/pos-agent/heartbeat"
-	pathUnpair    = "/api/pos-agent/unpair"
+	pathPair            = "/api/pos-agent/pair"
+	pathHeartbeat       = "/api/pos-agent/heartbeat"
+	pathUnpair          = "/api/pos-agent/unpair"
+	pathPrintVerified   = "/api/pos-agent/print-verified"
 )
 
 // Client speaks to the cloud's /api/pos-agent/* endpoints. The zero value
@@ -67,6 +68,24 @@ func (c *Client) Heartbeat(ctx context.Context, token string, hb HeartbeatReques
 // Authenticated with X-Terminal-Token; the body is empty.
 func (c *Client) Unpair(ctx context.Context, token string) error {
 	return c.do(ctx, http.MethodPost, pathUnpair, token, struct{}{}, nil)
+}
+
+// ReportPrintVerified records the operator's test-print confirmation
+// on the cloud. Authenticated with X-Terminal-Token.
+//
+//   - body.Verified=true  → cloud stamps last_print_verified_at = NOW().
+//     A subsequent successful re-verification re-stamps (no set-once
+//     constraint, unlike firstAgentPrintAt).
+//   - body.Verified=false → cloud CLEARS last_print_verified_at to NULL.
+//     A confirmed bad test downgrades a previously-verified terminal
+//     to "not verified" — see the cloud route's docstring for rationale.
+//
+// Returns nil on cloud 200; a typed cloud.Err* sentinel on auth /
+// network failures.
+func (c *Client) ReportPrintVerified(
+	ctx context.Context, token string, body PrintVerifiedRequest,
+) error {
+	return c.do(ctx, http.MethodPost, pathPrintVerified, token, body, nil)
 }
 
 // do performs an HTTP request and decodes the response envelope.

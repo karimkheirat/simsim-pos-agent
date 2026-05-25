@@ -48,3 +48,26 @@ PairCodeLabel=على كمبيوتر آخر، افتح Simsim في المتصفح
 PairCodeInputLabel=رمز الإقران (6 أرقام):
 PairCodeSkipCheckbox=سأقوم بإقران هذا الجهاز لاحقًا
 PairCodeValidationError=يجب أن يتكون الرمز من 6 أرقام بالضبط.
+
+; --- M13 print-verification: printer-picker driver advisory (translation pending native review) ---
+; %1 = driver name
+PrinterPickerDriverWarning=تنبيه: برنامج تشغيل هذه الطابعة الحالي هو «%1». لطباعة موثوقة للإيصالات، يُنصح ببرنامج التشغيل «Generic / Text Only». يمكنك المتابعة؛ ستتم طباعة اختبار في نهاية التثبيت.
+
+; --- M13 print-verification: post-pair test-print step (translation pending native review) ---
+RunStatusTestPrint=جارٍ طباعة إيصال اختباري...
+TestPrintConfirmTitle=التحقق من الطباعة
+; %1 = printer name, %2 = driver name
+TestPrintConfirmBody=تمت طباعة إيصال اختباري للتو.%n%nالطابعة: %1%nبرنامج التشغيل: %2%n%nهل طُبع بشكل صحيح؟
+TestPrintConfirmYes=نعم
+TestPrintConfirmNoChooseOther=لا — اختر طابعة أخرى
+; %1 = current printer name
+TestPrintFireFailedBody=فشل إرسال اختبار الطباعة إلى الطابعة «%1». تحقق من أن الطابعة قيد التشغيل ومتصلة، ثم أعد المحاولة.
+TestPrintRetryPickerCaption=اختر طابعة أخرى
+TestPrintRetryPickerBody=اختر الطابعة المراد استخدامها في اختبار الطباعة التالي. ستتم إعادة تكوين العميل وإعادة تشغيل الخدمة قبل المحاولة الجديدة.
+TestPrintRetryPickerOk=إعادة المحاولة
+TestPrintRetryPickerCancel=إلغاء
+TestPrintNoOtherPrinters=لم يتم اكتشاف طابعات أخرى. وصِّل طابعة وثبِّتها في Windows، ثم أعد تشغيل برنامج الإعداد.
+
+; --- M13 print-verification: wpFinished suffix (translation pending native review) ---
+InstallSuccessPrintVerified=✓ تم تأكيد طباعة الإيصال الاختباري من قِبل المشغّل.
+InstallSuccessPrintNotVerified=⚠ لم يتم تأكيد الطباعة. قبل أول إيصال للعميل، افتح لوحة تحكم Simsim وشغِّل «اطبع إيصالًا اختباريًا» من صفحة الكاسة.

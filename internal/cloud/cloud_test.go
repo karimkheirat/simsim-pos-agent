@@ -218,6 +218,86 @@ func TestUnpair_Success(t *testing.T) {
 	}
 }
 
+// ReportPrintVerified -------------------------------------------------------
+
+func TestReportPrintVerified_Success(t *testing.T) {
+	var (
+		seenPath  string
+		seenToken string
+		body      PrintVerifiedRequest
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenToken = r.Header.Get("X-Terminal-Token")
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeOKEnvelope(w, http.StatusOK, map[string]any{
+			"verified": true, "recorded": true,
+		})
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "0.4.0")
+	err := c.ReportPrintVerified(context.Background(), "good-token", PrintVerifiedRequest{
+		Verified: true,
+	})
+	if err != nil {
+		t.Fatalf("ReportPrintVerified: %v", err)
+	}
+	if seenPath != pathPrintVerified {
+		t.Errorf("path = %q, want %q", seenPath, pathPrintVerified)
+	}
+	if seenToken != "good-token" {
+		t.Errorf("X-Terminal-Token = %q", seenToken)
+	}
+	if body.Verified != true {
+		t.Errorf("body.Verified = %v, want true", body.Verified)
+	}
+	if body.ErrorClass != "" {
+		t.Errorf("body.ErrorClass = %q, want empty for verified=true", body.ErrorClass)
+	}
+}
+
+func TestReportPrintVerified_FailedRoundTripsErrorClass(t *testing.T) {
+	var body PrintVerifiedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		writeOKEnvelope(w, http.StatusOK, map[string]any{
+			"verified": false, "recorded": true,
+		})
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "0.4.0")
+	err := c.ReportPrintVerified(context.Background(), "good-token", PrintVerifiedRequest{
+		Verified:   false,
+		ErrorClass: "OPERATOR_REJECTED",
+	})
+	if err != nil {
+		t.Fatalf("ReportPrintVerified: %v", err)
+	}
+	if body.Verified != false {
+		t.Errorf("body.Verified = %v, want false", body.Verified)
+	}
+	if body.ErrorClass != "OPERATOR_REJECTED" {
+		t.Errorf("body.ErrorClass = %q, want OPERATOR_REJECTED", body.ErrorClass)
+	}
+}
+
+func TestReportPrintVerified_Unauthenticated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHENTICATED", "Token invalide")
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "0.4.0")
+	err := c.ReportPrintVerified(context.Background(), "bad-token", PrintVerifiedRequest{
+		Verified: true,
+	})
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("err = %v; want errors.Is(err, ErrUnauthenticated)", err)
+	}
+}
+
 // User-Agent / headers ------------------------------------------------------
 
 func TestUserAgentSentOnEveryRequest(t *testing.T) {
@@ -228,6 +308,7 @@ func TestUserAgentSentOnEveryRequest(t *testing.T) {
 		{"pair", func(c *Client) error { _, err := c.Pair(context.Background(), "x", "v", "m"); return err }},
 		{"heartbeat", func(c *Client) error { return c.Heartbeat(context.Background(), "t", HeartbeatRequest{}) }},
 		{"unpair", func(c *Client) error { return c.Unpair(context.Background(), "t") }},
+		{"report_verified", func(c *Client) error { return c.ReportPrintVerified(context.Background(), "t", PrintVerifiedRequest{Verified: true}) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

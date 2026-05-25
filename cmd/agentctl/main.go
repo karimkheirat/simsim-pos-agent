@@ -33,6 +33,8 @@ Usage:
   agentctl pair --code <6-digit-code> [flags]
   agentctl unpair [flags]
   agentctl status [flags]
+  agentctl test-print [flags]                         (M13 print verification — fires /test-print)
+  agentctl verify-print (--ok | --fail <class>) [flags] (M13 print verification — reports to cloud)
   agentctl --version
 
 Common flags:
@@ -59,6 +61,16 @@ func main() {
 		exitCode = runUnpair(os.Args[2:])
 	case "status":
 		exitCode = runStatus(os.Args[2:])
+	case "test-print":
+		// M13 print-verification — fires the local agent's POST /test-print.
+		// Used by the installer wizard after pair to drive a real receipt
+		// through the spooler before the operator confirms.
+		exitCode = runTestPrint(os.Args[2:])
+	case "verify-print":
+		// M13 print-verification — reports the operator's confirmation
+		// (Oui/Non) to the cloud via the local agent's /report-verified
+		// bridge. Used by the installer wizard after the dialog.
+		exitCode = runVerifyPrint(os.Args[2:])
 	default:
 		// Friendly fallback for unknown subcommands and "agent --help" /
 		// "agent -h" patterns; mirrors cmd/agent's no-args behavior.

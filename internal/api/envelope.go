@@ -43,6 +43,17 @@ const (
 	// chart the two pipelines separately.
 	CodeLabelPrintFailed = "LABEL_PRINT_FAILED"
 
+	// M13 print-verification hardening — /report-verified endpoint.
+	//
+	// CodeCloudUnreachable is the 502 returned when the loopback
+	// /report-verified handler successfully receives the operator's
+	// confirmation but the downstream cloud call to
+	// /api/pos-agent/print-verified fails (cloud rejected the token,
+	// network error, 5xx). Distinct from CodeInternal so the web
+	// client + installer can decide whether to retry the cloud hop
+	// without re-prompting the operator for the same confirmation.
+	CodeCloudUnreachable = "CLOUD_UNREACHABLE"
+
 	// M13 A.1 — JWT handshake auth codes.
 	//
 	// CodeAgentUnpaired is distinct from CodeNotPaired: NOT_PAIRED is
