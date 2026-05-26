@@ -293,9 +293,13 @@ begin
   // FmtMessage so the warning string can interpolate the actual
   // driver name — operators see exactly what driver is currently
   // wired and can decide whether to swap it out before installing.
-  PrinterDriverWarningLabel.Caption :=
-    FmtMessage(ExpandConstant('{cm:PrinterPickerDriverWarning}'),
-               [SelectedPrinterDriverName]);
+  //
+  // The [...] literal MUST stay on the same line as FmtMessage(. A
+  // continuation line that starts with '[' is read by Inno's
+  // preprocessor as an INI section header and fails compile with
+  // "Invalid section tag" (same bug class fixed in v0.3.3 for the
+  // buildSuccessMessage FmtMessage calls in installer.iss).
+  PrinterDriverWarningLabel.Caption := FmtMessage(ExpandConstant('{cm:PrinterPickerDriverWarning}'), [SelectedPrinterDriverName]);
 end;
 
 // populatePrinterPicker is invoked from CurPageChanged whenever the

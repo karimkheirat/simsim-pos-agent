@@ -451,9 +451,11 @@ begin
       // PRINTER_NOT_CONFIGURED, etc. Surface a dialog so the operator
       // can swap printers and try again — the test-print failure
       // looks indistinguishable from a "Non" answer at this layer.
+      // [...] literal kept on the same line as FmtMessage( — a line
+      // starting with '[' is read as an INI section header by Inno's
+      // preprocessor ("Invalid section tag"). Same bug class as v0.3.3.
       Reply := MsgBox(
-        FmtMessage(ExpandConstant('{cm:TestPrintFireFailedBody}'),
-                   [CurrentPrinter]),
+        FmtMessage(ExpandConstant('{cm:TestPrintFireFailedBody}'), [CurrentPrinter]),
         mbError,
         MB_RETRYCANCEL);
       if Reply <> IDRETRY then
@@ -487,8 +489,8 @@ begin
 
     // 2. Test print fired. Ask the operator if it printed correctly.
     DialogTitle := ExpandConstant('{cm:TestPrintConfirmTitle}');
-    DialogBody := FmtMessage(ExpandConstant('{cm:TestPrintConfirmBody}'),
-                             [CurrentPrinter, CurrentDriver]);
+    // [...] literal kept on the same line as FmtMessage( (see above).
+    DialogBody := FmtMessage(ExpandConstant('{cm:TestPrintConfirmBody}'), [CurrentPrinter, CurrentDriver]);
     // Inno's TaskDialogMsgBox supports custom button labels — we use
     // it for the Oui / Non-choose-another pair so the dialog matches
     // the operator's mental model better than a generic Yes/No.
