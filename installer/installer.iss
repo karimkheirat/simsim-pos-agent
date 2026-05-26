@@ -345,58 +345,79 @@ begin
     Exit;
   end;
 
-  F := TSetupForm.Create(nil);
+  // Fail-safe wrapper. This hand-rolled modal has never run in the
+  // field; ANY runtime failure (form creation, control wiring,
+  // ShowModal) must degrade to "no printer picked" (Result='') rather
+  // than propagate out of CurStepChanged and abort/rollback the
+  // install. The inner try/finally still frees the form even when the
+  // outer except fires. PascalScript can't combine except+finally in
+  // one block, so they're nested.
   try
-    F.Caption := ExpandConstant('{cm:TestPrintRetryPickerCaption}');
-    F.ClientWidth := ScaleX(420);
-    F.ClientHeight := ScaleY(180);
-    F.Position := poOwnerFormCenter;
+    F := TSetupForm.Create(nil);
+    try
+      F.Caption := ExpandConstant('{cm:TestPrintRetryPickerCaption}');
+      F.ClientWidth := ScaleX(420);
+      F.ClientHeight := ScaleY(180);
+      // poScreenCenter, NOT poOwnerFormCenter: the form is created
+      // with a nil owner, so "center on owner" has no reference form
+      // and can drop the window at (0,0) / off-screen. Screen-center
+      // is correct and owner-independent.
+      F.Position := poScreenCenter;
 
-    Lbl := TLabel.Create(F);
-    Lbl.Parent := F;
-    Lbl.Caption := ExpandConstant('{cm:TestPrintRetryPickerBody}');
-    Lbl.Left := ScaleX(16);
-    Lbl.Top := ScaleY(16);
-    Lbl.Width := ScaleX(388);
-    Lbl.Height := ScaleY(40);
-    Lbl.WordWrap := True;
-    Lbl.AutoSize := False;
+      Lbl := TLabel.Create(F);
+      Lbl.Parent := F;
+      Lbl.Caption := ExpandConstant('{cm:TestPrintRetryPickerBody}');
+      Lbl.Left := ScaleX(16);
+      Lbl.Top := ScaleY(16);
+      Lbl.Width := ScaleX(388);
+      Lbl.Height := ScaleY(40);
+      Lbl.WordWrap := True;
+      Lbl.AutoSize := False;
 
-    Combo := TNewComboBox.Create(F);
-    Combo.Parent := F;
-    Combo.Style := csDropDownList;
-    Combo.Left := ScaleX(16);
-    Combo.Top := ScaleY(72);
-    Combo.Width := ScaleX(388);
-    defaultIdx := 0;
-    for i := 0 to GetArrayLength(Names) - 1 do
-    begin
-      Combo.Items.Add(Names[i]);
-      if Names[i] = CurrentPrinter then
-        defaultIdx := i;
+      Combo := TNewComboBox.Create(F);
+      Combo.Parent := F;
+      Combo.Style := csDropDownList;
+      Combo.Left := ScaleX(16);
+      Combo.Top := ScaleY(72);
+      Combo.Width := ScaleX(388);
+      defaultIdx := 0;
+      for i := 0 to GetArrayLength(Names) - 1 do
+      begin
+        Combo.Items.Add(Names[i]);
+        if Names[i] = CurrentPrinter then
+          defaultIdx := i;
+      end;
+      Combo.ItemIndex := defaultIdx;
+
+      OkBtn := TNewButton.Create(F);
+      OkBtn.Parent := F;
+      OkBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerOk}');
+      OkBtn.Left := ScaleX(220);
+      OkBtn.Top := ScaleY(130);
+      OkBtn.Width := ScaleX(90);
+      OkBtn.ModalResult := mrOk;
+
+      CancelBtn := TNewButton.Create(F);
+      CancelBtn.Parent := F;
+      CancelBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerCancel}');
+      CancelBtn.Left := ScaleX(314);
+      CancelBtn.Top := ScaleY(130);
+      CancelBtn.Width := ScaleX(90);
+      CancelBtn.ModalResult := mrCancel;
+
+      // Only a positive OK + a real selection yields a printer name.
+      // Any other ShowModal result (mrCancel, the window [X], or an
+      // unexpected value) leaves Result='' → caller treats as cancel.
+      // The ItemIndex >= 0 guard defends against an empty-selection
+      // index error (can't happen given defaultIdx, but cheap).
+      if (F.ShowModal = mrOk) and (Combo.ItemIndex >= 0) then
+        Result := Combo.Items[Combo.ItemIndex];
+    finally
+      F.Free;
     end;
-    Combo.ItemIndex := defaultIdx;
-
-    OkBtn := TNewButton.Create(F);
-    OkBtn.Parent := F;
-    OkBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerOk}');
-    OkBtn.Left := ScaleX(220);
-    OkBtn.Top := ScaleY(130);
-    OkBtn.Width := ScaleX(90);
-    OkBtn.ModalResult := mrOk;
-
-    CancelBtn := TNewButton.Create(F);
-    CancelBtn.Parent := F;
-    CancelBtn.Caption := ExpandConstant('{cm:TestPrintRetryPickerCancel}');
-    CancelBtn.Left := ScaleX(314);
-    CancelBtn.Top := ScaleY(130);
-    CancelBtn.Width := ScaleX(90);
-    CancelBtn.ModalResult := mrCancel;
-
-    if F.ShowModal = mrOk then
-      Result := Combo.Items[Combo.ItemIndex];
-  finally
-    F.Free;
+  except
+    // Swallow any modal runtime failure → treat as "no printer picked".
+    Result := '';
   end;
 end;
 
@@ -428,6 +449,15 @@ begin
   CurrentPrinter := SelectedPrinterName;
   CurrentDriver := SelectedPrinterDriver;
 
+  // Fail-safe: the whole test-print / confirm / retry loop runs inside
+  // try/except. Any unhandled runtime failure raised below (the
+  // hand-rolled modal, TaskDialogMsgBox, Exec, etc.) is caught at the
+  // matching `except` after the loop, degraded to verified=false, and
+  // the procedure returns normally so the install FINISHES. The `Exit`
+  // branches inside the loop leave the procedure cleanly without
+  // triggering `except` (Exit is not an exception). The loop body keeps
+  // its existing indentation so this hardening stays a two-marker diff.
+  try
   Attempts := 0;
   while Attempts < PRINT_VERIFY_MAX_RETRIES do
   begin
@@ -546,6 +576,16 @@ begin
   PrintVerifyErrorClass := 'MAX_RETRIES_EXCEEDED';
   Exec(AgentctlExe, 'verify-print --fail MAX_RETRIES_EXCEEDED', '',
        SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  except
+    // Any exception escaping the loop above lands here. Degrade to
+    // "unverified" (wpFinished then shows the existing "impression non
+    // vérifiée" warning), best-effort report it to the cloud, and
+    // return normally so the install completes cleanly.
+    PrintVerifyConfirmed := False;
+    PrintVerifyErrorClass := 'VERIFY_STEP_EXCEPTION';
+    Exec(AgentctlExe, 'verify-print --fail VERIFY_STEP_EXCEPTION', '',
+         SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -563,7 +603,22 @@ begin
     // failed" message via buildSuccessMessage; the operator runs the
     // test print later from the retailer settings page.
     if PairResultCode = 0 then
-      runVerifyPrintStep;
+    begin
+      // Final safety net at the installer-engine boundary. Even though
+      // runVerifyPrintStep guards its own loop, an unhandled exception
+      // reaching this ssPostInstall handler can make Inno abort/rollback
+      // the install. Catch here too: degrade to "attempted, unverified"
+      // and let wpFinished surface the warning. The install ALWAYS
+      // finishes.
+      try
+        runVerifyPrintStep;
+      except
+        PrintVerifyAttempted := True;
+        PrintVerifyConfirmed := False;
+        if PrintVerifyErrorClass = '' then
+          PrintVerifyErrorClass := 'VERIFY_STEP_EXCEPTION';
+      end;
+    end;
   end;
 end;
 
