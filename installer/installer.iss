@@ -345,7 +345,7 @@ begin
     Exit;
   end;
 
-  F := CreateCustomForm;
+  F := TSetupForm.Create(nil);
   try
     F.Caption := ExpandConstant('{cm:TestPrintRetryPickerCaption}');
     F.ClientWidth := ScaleX(420);
