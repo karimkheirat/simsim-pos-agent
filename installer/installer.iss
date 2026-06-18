@@ -183,7 +183,7 @@ end;
 // If the URL ever moves to a #define, swap this for {#CloudBaseURL}.
 function GetCloudBaseURLArg(Param: String): String;
 begin
-  Result := 'https://web-production-6bb4d.up.railway.app';
+  Result := 'https://opensimsim.co';
 end;
 
 // --- Wizard lifecycle ---

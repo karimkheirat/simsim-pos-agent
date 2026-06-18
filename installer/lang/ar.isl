@@ -44,7 +44,7 @@ PrinterPickerDetectionFailed=تعذر اكتشاف الطابعات المثبت
 ; --- AG4: pair code entry page (translation pending native review) ---
 PairCodeCaption=إقران هذا الجهاز
 PairCodeSubcaption=أدخل الرمز الذي تم إنشاؤه من لوحة تحكم Simsim.
-PairCodeLabel=على كمبيوتر آخر، افتح Simsim في المتصفح وأنشئ رمز إقران لهذا الجهاز:%nhttps://web-production-6bb4d.up.railway.app/fr/retailer/settings/pos-terminals
+PairCodeLabel=على كمبيوتر آخر، افتح Simsim في المتصفح وأنشئ رمز إقران لهذا الجهاز:%nhttps://opensimsim.co/fr/retailer/settings/pos-terminals
 PairCodeInputLabel=رمز الإقران (6 أرقام):
 PairCodeSkipCheckbox=سأقوم بإقران هذا الجهاز لاحقًا
 PairCodeValidationError=يجب أن يتكون الرمز من 6 أرقام بالضبط.

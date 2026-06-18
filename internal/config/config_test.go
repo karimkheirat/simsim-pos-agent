@@ -23,8 +23,8 @@ func TestDefaults(t *testing.T) {
 	if c.PrinterName != "" {
 		t.Errorf("PrinterName = %q, want empty", c.PrinterName)
 	}
-	if c.CloudBaseURL != "https://web-production-6bb4d.up.railway.app" {
-		t.Errorf("CloudBaseURL = %q, want railway prod URL", c.CloudBaseURL)
+	if c.CloudBaseURL != "https://opensimsim.co" {
+		t.Errorf("CloudBaseURL = %q, want opensimsim.co prod URL", c.CloudBaseURL)
 	}
 	if c.HeartbeatSeconds != 300 {
 		t.Errorf("HeartbeatSeconds = %d, want 300", c.HeartbeatSeconds)

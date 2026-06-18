@@ -35,7 +35,7 @@ PrinterPickerDetectionFailed=Could not detect installed printers (PowerShell fai
 ; --- AG4: pair code entry page ---
 PairCodeCaption=Pair this register
 PairCodeSubcaption=Enter the code generated from the Simsim dashboard.
-PairCodeLabel=On another computer, open Simsim in your browser and generate a pairing code for this register:%nhttps://web-production-6bb4d.up.railway.app/fr/retailer/settings/pos-terminals
+PairCodeLabel=On another computer, open Simsim in your browser and generate a pairing code for this register:%nhttps://opensimsim.co/fr/retailer/settings/pos-terminals
 PairCodeInputLabel=Pairing code (6 digits):
 PairCodeSkipCheckbox=I'll pair this register later
 PairCodeValidationError=The code must be exactly 6 digits.

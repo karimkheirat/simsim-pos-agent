@@ -88,7 +88,7 @@ func Defaults() Config {
 	return Config{
 		Version:          "0.1.0", // informational only; build-time Version constant in main() overrides
 		ListenPort:       47291,
-		CloudBaseURL:     "https://web-production-6bb4d.up.railway.app",
+		CloudBaseURL:     "https://opensimsim.co",
 		HeartbeatSeconds: 300,
 		PrinterName:      "",
 		// M13 Track B PR 1 — new two-printer fields default empty;

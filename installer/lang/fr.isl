@@ -40,7 +40,7 @@ PrinterPickerDetectionFailed=Impossible de détecter les imprimantes installées
 ; --- AG4: pair code entry page ---
 PairCodeCaption=Jumelage de la caisse
 PairCodeSubcaption=Entrez le code généré depuis le tableau de bord Simsim.
-PairCodeLabel=Sur un autre ordinateur, ouvrez Simsim dans le navigateur et générez un code de jumelage pour cette caisse :%nhttps://web-production-6bb4d.up.railway.app/fr/retailer/settings/pos-terminals
+PairCodeLabel=Sur un autre ordinateur, ouvrez Simsim dans le navigateur et générez un code de jumelage pour cette caisse :%nhttps://opensimsim.co/fr/retailer/settings/pos-terminals
 PairCodeInputLabel=Code de jumelage (6 chiffres) :
 PairCodeSkipCheckbox=Je jumellerai cette caisse plus tard
 PairCodeValidationError=Le code doit comporter 6 chiffres.
