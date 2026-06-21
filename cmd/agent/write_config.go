@@ -37,9 +37,10 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("write-config", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		configPath   = fs.String("config", config.DefaultConfigPath(), "Path to config.json")
-		printerName  = fs.String("printer", "", "Set printer_name (empty leaves unchanged)")
-		cloudBaseURL = fs.String("cloud-base-url", "", "Set cloud_base_url (empty leaves unchanged)")
+		configPath      = fs.String("config", config.DefaultConfigPath(), "Path to config.json")
+		printerName     = fs.String("printer", "", "Set printer_name (empty leaves unchanged)")
+		cloudBaseURL    = fs.String("cloud-base-url", "", "Set cloud_base_url (empty leaves unchanged)")
+		receiptLanguage = fs.String("receipt-language", "", "Set receipt_printer_language (escpos|tspl; empty leaves unchanged)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -60,6 +61,12 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	if *cloudBaseURL != "" {
 		cfg.CloudBaseURL = *cloudBaseURL
+	}
+	// TSPL receipt path — the setup UI's guided test sets this per-printer
+	// once it knows the printer speaks TSPL. Empty leaves the existing
+	// value (default "escpos"). config.Validate below rejects bad values.
+	if *receiptLanguage != "" {
+		cfg.ReceiptPrinterLanguage = *receiptLanguage
 	}
 
 	// Always inject the build-time Version so a fresh write doesn't

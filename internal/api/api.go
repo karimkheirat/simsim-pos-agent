@@ -65,6 +65,18 @@ type Config struct {
 	// preview UI.
 	TSPLDialect string
 
+	// ReceiptPrinterLanguage selects the receipt render language:
+	// "escpos" (default) or "tspl" (TSPL-only label printers). Wired
+	// from config.Config; empty defaults to "escpos" in NewTwo.
+	ReceiptPrinterLanguage string
+
+	// ReceiptWidthDots + DPI feed the TSPL receipt renderer. Wired from
+	// config (ReceiptWidthDots resolved via EffectiveReceiptWidthDots).
+	// Zero defaults in NewTwo: DPI→203, ReceiptWidthDots→derive from
+	// PaperWidthMM. Ignored on the ESC/POS path.
+	ReceiptWidthDots int
+	DPI              int
+
 	// CloudReporter is the agent's outbound channel to the cloud's
 	// /api/pos-agent/* endpoints. Used by the M13 print-verification
 	// loopback handler (POST /report-verified) to forward operator-
@@ -147,6 +159,21 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// the validated config.Config loader (which has the same default).
 	if cfg.TSPLDialect == "" {
 		cfg.TSPLDialect = "standard"
+	}
+	// TSPL receipt path defaults for direct-construction callers (tests).
+	// Production main wires these from the validated config.Config.
+	if cfg.ReceiptPrinterLanguage == "" {
+		cfg.ReceiptPrinterLanguage = "escpos"
+	}
+	if cfg.DPI == 0 {
+		cfg.DPI = 203
+	}
+	if cfg.ReceiptWidthDots == 0 {
+		if cfg.PaperWidthMM == 58 {
+			cfg.ReceiptWidthDots = 384
+		} else {
+			cfg.ReceiptWidthDots = 576
+		}
 	}
 
 	s := &Server{

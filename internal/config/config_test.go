@@ -35,6 +35,59 @@ func TestDefaults(t *testing.T) {
 	if c.PaperWidthMM != 80 {
 		t.Errorf("PaperWidthMM = %d, want 80", c.PaperWidthMM)
 	}
+	if c.ReceiptPrinterLanguage != "escpos" {
+		t.Errorf("ReceiptPrinterLanguage = %q, want escpos", c.ReceiptPrinterLanguage)
+	}
+	if c.DPI != 203 {
+		t.Errorf("DPI = %d, want 203", c.DPI)
+	}
+	if c.ReceiptWidthDots != 0 {
+		t.Errorf("ReceiptWidthDots = %d, want 0 (derive)", c.ReceiptWidthDots)
+	}
+}
+
+func TestValidate_ReceiptPrinterLanguage(t *testing.T) {
+	base := Defaults()
+	if err := Validate(base); err != nil {
+		t.Fatalf("defaults should validate: %v", err)
+	}
+
+	base.ReceiptPrinterLanguage = "tspl"
+	if err := Validate(base); err != nil {
+		t.Errorf("tspl language should validate: %v", err)
+	}
+
+	base.ReceiptPrinterLanguage = "zpl"
+	if err := Validate(base); err == nil {
+		t.Error("expected error for invalid receipt_printer_language=zpl")
+	}
+}
+
+func TestValidate_DPI(t *testing.T) {
+	c := Defaults()
+	c.DPI = 0
+	if err := Validate(c); err == nil {
+		t.Error("expected error for dpi=0")
+	}
+	c.DPI = 300
+	if err := Validate(c); err != nil {
+		t.Errorf("dpi=300 should validate: %v", err)
+	}
+}
+
+func TestEffectiveReceiptWidthDots(t *testing.T) {
+	c := Defaults() // PaperWidthMM 80, ReceiptWidthDots 0
+	if got := c.EffectiveReceiptWidthDots(); got != 576 {
+		t.Errorf("80mm derive = %d, want 576", got)
+	}
+	c.PaperWidthMM = 58
+	if got := c.EffectiveReceiptWidthDots(); got != 384 {
+		t.Errorf("58mm derive = %d, want 384", got)
+	}
+	c.ReceiptWidthDots = 600 // explicit override wins
+	if got := c.EffectiveReceiptWidthDots(); got != 600 {
+		t.Errorf("explicit override = %d, want 600", got)
+	}
 }
 
 func TestDefaultMachineIDPath(t *testing.T) {

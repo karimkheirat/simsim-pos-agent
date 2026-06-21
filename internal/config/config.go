@@ -73,6 +73,40 @@ type Config struct {
 	// configured width, NOT the per-model lookup hint in
 	// internal/capabilities — admins override hardware defaults here.
 	PaperWidthMM int `json:"paper_width_mm"`
+
+	// ReceiptPrinterLanguage selects the command language the receipt
+	// renderer emits: "escpos" (default) for ESC/POS receipt printers,
+	// "tspl" for TSPL-only label printers (e.g. the Gprinter GP-3150TN)
+	// that cannot parse ESC/POS. Set per-printer by the setup UI's guided
+	// test, NOT a user-facing toggle. Validated to {escpos, tspl}.
+	ReceiptPrinterLanguage string `json:"receipt_printer_language"`
+
+	// ReceiptWidthDots is the printable receipt width in dots, used by the
+	// TSPL receipt renderer for centering + right-alignment and the SIZE
+	// width. 0 = derive from PaperWidthMM (58mm→384, 80mm→576 at 203dpi).
+	// TUNABLE against real hardware; ignored by the ESC/POS path.
+	ReceiptWidthDots int `json:"receipt_width_dots"`
+
+	// DPI is the printer resolution (dots/inch) used for mm↔dots math in
+	// the TSPL receipt renderer. Default 203 (the thermal standard); the
+	// GP-3150TN may be 203 or 300 — TUNABLE. Ignored by the ESC/POS path.
+	DPI int `json:"dpi"`
+}
+
+// EffectiveReceiptWidthDots returns the printable receipt width in dots
+// for the TSPL receipt renderer: the explicit ReceiptWidthDots when set
+// (>0), otherwise derived from PaperWidthMM (58mm→384, 80mm→576). The
+// derived values assume the 203dpi thermal standard and a ~full-width
+// printable area; calibrate ReceiptWidthDots against the real printer if
+// the margins are off.
+func (c Config) EffectiveReceiptWidthDots() int {
+	if c.ReceiptWidthDots > 0 {
+		return c.ReceiptWidthDots
+	}
+	if c.PaperWidthMM == 58 {
+		return 384
+	}
+	return 576
 }
 
 // Sentinel errors returned by Load. Callers can detect via errors.Is and
@@ -108,6 +142,13 @@ func Defaults() Config {
 		// for smaller-format retail (newsstand, deli labels) which
 		// the agent supports but doesn't default to.
 		PaperWidthMM: 80,
+		// TSPL receipt path — escpos is the default receipt language;
+		// tspl is opted into per-printer by the setup UI. ReceiptWidthDots
+		// 0 means "derive from PaperWidthMM"; DPI 203 is the thermal
+		// standard. Both are TUNABLE for real-printer calibration.
+		ReceiptPrinterLanguage: "escpos",
+		ReceiptWidthDots:       0,
+		DPI:                    203,
 	}
 }
 
@@ -194,6 +235,20 @@ func Validate(c Config) error {
 	case "standard", "rongta":
 	default:
 		return fmt.Errorf("config: tspl_dialect %q invalid (want standard or rongta)", c.TSPLDialect)
+	}
+	// TSPL receipt path — receipt_printer_language gates ESC/POS vs TSPL
+	// receipt rendering. dpi must be positive (mm↔dots math); width_dots
+	// 0 is valid and means "derive from paper_width_mm".
+	switch c.ReceiptPrinterLanguage {
+	case "escpos", "tspl":
+	default:
+		return fmt.Errorf("config: receipt_printer_language %q invalid (want escpos or tspl)", c.ReceiptPrinterLanguage)
+	}
+	if c.DPI <= 0 {
+		return fmt.Errorf("config: dpi %d must be > 0", c.DPI)
+	}
+	if c.ReceiptWidthDots < 0 {
+		return fmt.Errorf("config: receipt_width_dots %d must be >= 0 (0 = derive from paper_width_mm)", c.ReceiptWidthDots)
 	}
 	return nil
 }

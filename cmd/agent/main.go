@@ -415,6 +415,11 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		PaperWidthMM: cfg.PaperWidthMM,
 		// M13 Track B PR 1 — TSPL dialect ("standard" or "rongta").
 		TSPLDialect: cfg.TSPLDialect,
+		// TSPL receipt path — language selector + sizing knobs. WidthDots
+		// resolved here (config 0 = derive from PaperWidthMM).
+		ReceiptPrinterLanguage: cfg.ReceiptPrinterLanguage,
+		ReceiptWidthDots:       cfg.EffectiveReceiptWidthDots(),
+		DPI:                    cfg.DPI,
 		// M13 print-verification — forward operator-confirmed test-print
 		// outcomes to the cloud's /api/pos-agent/print-verified. nil
 		// when no cloud is configured; api's defensive 503 surfaces.

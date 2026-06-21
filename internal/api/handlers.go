@@ -11,6 +11,7 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 	"github.com/karimkheirat/simsim-pos-agent/internal/receipt"
+	"github.com/karimkheirat/simsim-pos-agent/internal/tspl"
 	"github.com/karimkheirat/simsim-pos-agent/internal/util"
 )
 
@@ -169,6 +170,41 @@ func (s *Server) capabilitiesForPrinter() capabilities.PrinterCapabilities {
 	return caps
 }
 
+// renderReceipt renders a Receipt to the configured printer language's
+// byte stream — ESC/POS by default, or TSPL when receipt_printer_language
+// is "tspl" (TSPL-only label printers like the GP-3150TN that can't parse
+// ESC/POS). Both byte streams flow through the same Printer.Print
+// transport — the choice is purely in how the document is serialized.
+func (s *Server) renderReceipt(r receipt.Receipt, openDrawerAfter bool) ([]byte, error) {
+	if s.cfg.ReceiptPrinterLanguage == "tspl" {
+		// TSPL receipt path. open_drawer_after has no TSPL analog (label
+		// printers have no drawer port) and is intentionally dropped here.
+		return receipt.RenderTSPL(r, s.tsplReceiptOptions())
+	}
+	return receipt.Render(r, receipt.RenderOptions{
+		OpenDrawerAfter: openDrawerAfter,
+		PaperWidthMM:    s.cfg.PaperWidthMM,
+		CutSupported:    s.capabilitiesForPrinter().CutSupported,
+	})
+}
+
+// tsplReceiptOptions builds the TSPL receipt render options from agent
+// config. WidthDots + DPI come from config so they can be calibrated on
+// the real printer without a rebuild. Font / Density / Speed are
+// constants here — TUNABLE in code, not yet config-exposed (deferred to
+// the real-printer calibration pass).
+func (s *Server) tsplReceiptOptions() receipt.TSPLReceiptOptions {
+	return receipt.TSPLReceiptOptions{
+		PaperWidthMM: s.cfg.PaperWidthMM,
+		WidthDots:    s.cfg.ReceiptWidthDots,
+		DPI:          s.cfg.DPI,
+		Font:         tspl.Font2, // TUNABLE — primary bitmap font
+		Density:      8,          // TUNABLE
+		Speed:        4,          // TUNABLE
+		Dialect:      tspl.Dialect(s.cfg.TSPLDialect),
+	}
+}
+
 // labelCapabilities is the wire-shape extension of the per-model TSPL
 // capabilities row with the agent's tspl_dialect choice attached. The
 // web client uses dialect to mirror the agent's EAN-13 hyphen choice
@@ -305,11 +341,7 @@ func (s *Server) handlePrint(w http.ResponseWriter, r *http.Request) {
 	// capabilities lookup). For an unconfigured printer the capability
 	// fallback applies; the renderer's defaults preserve pre-A.5a
 	// behavior for 80mm + cut.
-	data, err := receipt.Render(req.Receipt, receipt.RenderOptions{
-		OpenDrawerAfter: req.OpenDrawerAfter,
-		PaperWidthMM:    s.cfg.PaperWidthMM,
-		CutSupported:    s.capabilitiesForPrinter().CutSupported,
-	})
+	data, err := s.renderReceipt(req.Receipt, req.OpenDrawerAfter)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidReceipt, err.Error())
 		return
@@ -397,11 +429,7 @@ func (s *Server) handleTestPrint(w http.ResponseWriter, r *http.Request) {
 	// M13 A.5a — /test-print honors the same per-render options as
 	// /print so the cashier's "test print" matches what a real receipt
 	// would look like on the configured printer.
-	data, err := receipt.Render(receiptFixture, receipt.RenderOptions{
-		OpenDrawerAfter: true,
-		PaperWidthMM:    s.cfg.PaperWidthMM,
-		CutSupported:    s.capabilitiesForPrinter().CutSupported,
-	})
+	data, err := s.renderReceipt(receiptFixture, true)
 	if err != nil {
 		// Fixture is canonical; render failure is an internal bug.
 		writeError(w, http.StatusInternalServerError, CodeInternal, "render fixture: "+err.Error())

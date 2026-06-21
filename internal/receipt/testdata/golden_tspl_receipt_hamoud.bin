@@ -1,0 +1,29 @@
+CLS
+SIZE 80 mm,86 mm
+GAP 0 mm,0 mm
+DIRECTION 1
+DENSITY 8
+SPEED 4
+CODEPAGE 1252
+TEXT 120,16,"2",0,1,2,"Hamoud Boualem - Centre Oran"
+TEXT 150,60,"2",0,1,1,"12 Rue Larbi Ben M'hidi"
+TEXT 228,84,"2",0,1,1,"Oran 31000"
+TEXT 222,108,"2",0,1,1,"+213 41 ..."
+TEXT 138,132,"2",0,1,1,"NIF/RC line if applicable"
+TEXT 0,180,"2",0,1,1,"Ticket N°: 2026-0428-0001"
+TEXT 0,204,"2",0,1,1,"28/04/2026  14:32"
+TEXT 0,228,"2",0,1,1,"Caissier: Amine Benali"
+TEXT 0,252,"2",0,1,1,"Terminal: Caisse 1"
+TEXT 0,276,"2",0,1,1,"------------------------------------------"
+TEXT 0,300,"2",0,1,1,"Hamoud Cola 33cl           6        270,00"
+TEXT 0,324,"2",0,1,1,"------------------------------------------"
+TEXT 0,348,"2",0,1,1,"Remise -5%                          -13,50"
+TEXT 0,372,"2",0,1,1,"------------------------------------------"
+TEXT 0,396,"2",0,1,1,"Sous-total                          270,00"
+TEXT 0,420,"2",0,1,1,"Remise                              -13,50"
+TEXT 0,444,"2",0,1,2,"Total                           256,50 DZD"
+TEXT 0,512,"2",0,1,1,"Espèces                             300,00"
+TEXT 0,536,"2",0,1,1,"Rendu                                43,50"
+TEXT 162,584,"2",0,1,1,"Merci de votre visite"
+TEXT 174,608,"2",0,1,1,"Conservez ce ticket"
+PRINT 1,1
