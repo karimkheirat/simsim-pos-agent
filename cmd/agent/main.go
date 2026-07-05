@@ -25,6 +25,7 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/heartbeat"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
+	"github.com/karimkheirat/simsim-pos-agent/internal/scale"
 	svcpkg "github.com/karimkheirat/simsim-pos-agent/internal/service"
 )
 
@@ -61,6 +62,8 @@ Flags (write-config):
   --config string             Path to config.json
   --printer string            Set printer_name (skip arg leaves unchanged)
   --cloud-base-url string     Set cloud_base_url (skip arg leaves unchanged)
+  --scale-ip string           Set scale_ip (skip arg leaves unchanged)
+  --scale-port int            Set scale_port (0 leaves unchanged)
 `
 
 func main() {
@@ -391,6 +394,11 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		return nil, err
 	}
 
+	// Scale sync — the LAN label scale beside the two printers.
+	// nil when scale_ip/scale_port are unset (config.Validate already
+	// guaranteed they're either both set or both empty).
+	scaleDev := newScaleOrNil(cfg.ScaleIP, cfg.ScalePort, logger)
+
 	secStore, err := config.NewSecretStore(config.DefaultSecretsPath())
 	if err != nil {
 		return nil, fmt.Errorf("secrets: %w", err)
@@ -424,6 +432,9 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		// outcomes to the cloud's /api/pos-agent/print-verified. nil
 		// when no cloud is configured; api's defensive 503 surfaces.
 		CloudReporter: cloudReporterAdapter(cloudClient),
+		// Scale sync — nil when no scale is configured; the
+		// /scale/sync-plu handler surfaces NO_SCALE_CONFIGURED.
+		Scale: scaleDev,
 	}, receiptP, labelP)
 	if err != nil {
 		return nil, err
@@ -497,6 +508,19 @@ func newPrinterOrNil(spec, kind string, logger *slog.Logger) (printer.Printer, e
 		return nil, fmt.Errorf("%s printer %q: %w", kind, spec, err)
 	}
 	return p, nil
+}
+
+// newScaleOrNil constructs the TCP scale from scale_ip/scale_port or
+// returns nil when the operator has not configured one (both fields
+// empty — config.Validate rejects half-configured pairs). The typed
+// *scale.TCP is only wrapped into the scale.Scale interface when
+// non-nil, so api's `s.scale == nil` check stays truthful.
+func newScaleOrNil(ip string, port int, logger *slog.Logger) scale.Scale {
+	if ip == "" {
+		logger.Warn("no scale configured", "role", "scale")
+		return nil
+	}
+	return scale.NewTCP(ip, port)
 }
 
 // openServiceLog opens (creating dirs as needed) the service-mode log

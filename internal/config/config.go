@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -91,6 +92,17 @@ type Config struct {
 	// the TSPL receipt renderer. Default 203 (the thermal standard); the
 	// GP-3150TN may be 203 or 300 — TUNABLE. Ignored by the ESC/POS path.
 	DPI int `json:"dpi"`
+
+	// ScaleIP + ScalePort locate the Aclas LS2-series label scale on the
+	// store LAN for PLU sync (POST /scale/sync-plu). Both empty/zero =
+	// no scale configured (endpoint returns NO_SCALE_CONFIGURED). When
+	// one is set the other is required — Validate enforces the pairing
+	// so a half-configured scale fails loudly at startup, not at the
+	// first sync. There is no default port: the LS2 manual documents no
+	// fixed listening port, so the operator supplies what the scale's
+	// network setup screen shows.
+	ScaleIP   string `json:"scale_ip"`
+	ScalePort int    `json:"scale_port"`
 }
 
 // EffectiveReceiptWidthDots returns the printable receipt width in dots
@@ -149,6 +161,10 @@ func Defaults() Config {
 		ReceiptPrinterLanguage: "escpos",
 		ReceiptWidthDots:       0,
 		DPI:                    203,
+		// Scale sync — no scale by default; operators with an LS2 set
+		// both fields (agent write-config --scale-ip/--scale-port).
+		ScaleIP:   "",
+		ScalePort: 0,
 	}
 }
 
@@ -249,6 +265,20 @@ func Validate(c Config) error {
 	}
 	if c.ReceiptWidthDots < 0 {
 		return fmt.Errorf("config: receipt_width_dots %d must be >= 0 (0 = derive from paper_width_mm)", c.ReceiptWidthDots)
+	}
+	// Scale sync — scale_ip and scale_port travel together. A lone IP
+	// (or lone port) is a half-configured scale: reject at startup
+	// rather than surfacing as a confusing dial error mid-sync.
+	if (c.ScaleIP == "") != (c.ScalePort == 0) {
+		return fmt.Errorf("config: scale_ip and scale_port must be set together (got ip %q, port %d)", c.ScaleIP, c.ScalePort)
+	}
+	if c.ScaleIP != "" {
+		if net.ParseIP(c.ScaleIP) == nil {
+			return fmt.Errorf("config: scale_ip %q is not a valid IP address", c.ScaleIP)
+		}
+		if c.ScalePort < 1 || c.ScalePort > 65535 {
+			return fmt.Errorf("config: scale_port %d out of range (1..65535)", c.ScalePort)
+		}
 	}
 	return nil
 }

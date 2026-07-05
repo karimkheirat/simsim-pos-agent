@@ -54,6 +54,27 @@ const (
 	// without re-prompting the operator for the same confirmation.
 	CodeCloudUnreachable = "CLOUD_UNREACHABLE"
 
+	// Scale sync — POST /scale/sync-plu error codes.
+	//
+	// CodeNoScaleConfigured is the 503 returned when no scale is wired
+	// (scale_ip/scale_port unset). Mirrors NO_LABEL_PRINTER_CONFIGURED.
+	CodeNoScaleConfigured = "NO_SCALE_CONFIGURED"
+
+	// CodeScaleOffline is the 503 returned when the configured scale
+	// does not answer the reachability probe. Mirrors PRINTER_OFFLINE.
+	CodeScaleOffline = "SCALE_OFFLINE"
+
+	// CodeInvalidPluPayload is the 400 for a malformed /scale/sync-plu
+	// body (bad JSON, no entries, over the LS2's 12000-PLU capacity).
+	CodeInvalidPluPayload = "INVALID_PLU_PAYLOAD"
+
+	// CodeScaleSyncFailed is the 502 returned when the scale session
+	// itself fails (dial, timeout, protocol breakdown) — the sync is
+	// idempotent, so the caller retries the whole payload. Per-PLU
+	// rejections do NOT use this: they come back 200 with per-PLU
+	// results. 502 per the CLOUD_UNREACHABLE downstream-hop precedent.
+	CodeScaleSyncFailed = "SCALE_SYNC_FAILED"
+
 	// M13 A.1 — JWT handshake auth codes.
 	//
 	// CodeAgentUnpaired is distinct from CodeNotPaired: NOT_PAIRED is

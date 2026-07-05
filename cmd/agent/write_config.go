@@ -41,6 +41,8 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 		printerName     = fs.String("printer", "", "Set printer_name (empty leaves unchanged)")
 		cloudBaseURL    = fs.String("cloud-base-url", "", "Set cloud_base_url (empty leaves unchanged)")
 		receiptLanguage = fs.String("receipt-language", "", "Set receipt_printer_language (escpos|tspl; empty leaves unchanged)")
+		scaleIP         = fs.String("scale-ip", "", "Set scale_ip (empty leaves unchanged)")
+		scalePort       = fs.Int("scale-port", 0, "Set scale_port (0 leaves unchanged)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -67,6 +69,15 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 	// value (default "escpos"). config.Validate below rejects bad values.
 	if *receiptLanguage != "" {
 		cfg.ReceiptPrinterLanguage = *receiptLanguage
+	}
+	// Scale sync — same non-empty semantics as the printer flags. The
+	// set-together invariant (config.Validate) still applies, so a
+	// first-time setup must pass both flags in one invocation.
+	if *scaleIP != "" {
+		cfg.ScaleIP = *scaleIP
+	}
+	if *scalePort != 0 {
+		cfg.ScalePort = *scalePort
 	}
 
 	// Always inject the build-time Version so a fresh write doesn't

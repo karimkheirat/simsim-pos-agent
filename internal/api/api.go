@@ -13,6 +13,7 @@ import (
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
+	"github.com/karimkheirat/simsim-pos-agent/internal/scale"
 )
 
 // Default Config values, exposed only in the New constructor's defaulting.
@@ -84,6 +85,13 @@ type Config struct {
 	// terminal token. Nil → /report-verified returns 503; production
 	// main wires this from a cloud.Client shim.
 	CloudReporter CloudReporter
+
+	// Scale is the store's label scale for PLU sync (POST
+	// /scale/sync-plu). Wired as a Config field rather than a third
+	// NewTwo parameter — same injection shape as CloudReporter. Nil →
+	// /scale/sync-plu returns 503 NO_SCALE_CONFIGURED; production main
+	// wires this from scale_ip/scale_port via newScaleOrNil.
+	Scale scale.Scale
 }
 
 // CloudReporter is the narrow interface the M13 /report-verified
@@ -111,6 +119,7 @@ type Server struct {
 	secrets        config.SecretStore
 	idem           *IdempotencyStore
 	cloud          CloudReporter
+	scale          scale.Scale
 	handler        http.Handler
 }
 
@@ -184,6 +193,7 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 		secrets:        cfg.Secrets,
 		idem:           NewIdempotencyStore(cfg.IdempotencyTTL),
 		cloud:          cfg.CloudReporter,
+		scale:          cfg.Scale,
 	}
 
 	mux := http.NewServeMux()
@@ -217,6 +227,10 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// is post-handshake, the web client always has a JWT before
 	// touching it.
 	mux.HandleFunc("GET /capabilities", s.requireAuth(s.handleCapabilities))
+	// Scale sync — /scale/sync-plu downloads the store's weighed-
+	// product PLU table to the LAN label scale. Same JWT gate as /print;
+	// surfaces 503 NO_SCALE_CONFIGURED when no scale is wired.
+	mux.HandleFunc("POST /scale/sync-plu", s.requireAuth(s.handleSyncPLU))
 	// /drawer/open + /status are NOT print operations and are out of
 	// the A.1 scope — they stay on the legacy X-Terminal-Token gate.
 	mux.HandleFunc("POST /drawer/open", s.requireTerminalToken(s.handleDrawerOpen))

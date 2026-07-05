@@ -198,6 +198,15 @@ func TestValidate_Success(t *testing.T) {
 	}
 }
 
+func TestValidate_ScaleConfigured_OK(t *testing.T) {
+	c := Defaults()
+	c.ScaleIP = "192.168.1.50"
+	c.ScalePort = 5002
+	if err := Validate(c); err != nil {
+		t.Errorf("Validate(scale configured) = %v, want nil", err)
+	}
+}
+
 func TestValidate_InvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -218,6 +227,12 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"paper_width_mm 76 (non-spec)", func(c *Config) { c.PaperWidthMM = 76 }, "paper_width_mm"},
 		{"paper_width_mm 112 (non-spec)", func(c *Config) { c.PaperWidthMM = 112 }, "paper_width_mm"},
 		{"paper_width_mm negative", func(c *Config) { c.PaperWidthMM = -1 }, "paper_width_mm"},
+		// Scale sync — scale_ip/scale_port must be set together and valid.
+		{"scale_ip without port", func(c *Config) { c.ScaleIP = "192.168.1.50" }, "set together"},
+		{"scale_port without ip", func(c *Config) { c.ScalePort = 5002 }, "set together"},
+		{"scale_ip not an IP", func(c *Config) { c.ScaleIP = "scale.local"; c.ScalePort = 5002 }, "scale_ip"},
+		{"scale_port too high", func(c *Config) { c.ScaleIP = "192.168.1.50"; c.ScalePort = 70000 }, "scale_port"},
+		{"scale_port negative", func(c *Config) { c.ScalePort = -1 }, "set together"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

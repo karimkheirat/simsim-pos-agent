@@ -177,6 +177,53 @@ func TestRunWriteConfig_ValidationError(t *testing.T) {
 	}
 }
 
+// TestRunWriteConfig_ScaleFlags — --scale-ip/--scale-port land in the
+// new fields; both must be passed together (config.Validate enforces
+// the pairing, exit 1 on a lone flag).
+func TestRunWriteConfig_ScaleFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	var stdout, stderr bytes.Buffer
+	code := runWriteConfig([]string{
+		"--config", path,
+		"--scale-ip", "192.168.1.50",
+		"--scale-port", "5002",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d\nstderr: %s", code, stderr.String())
+	}
+	cfg := loadConfig(t, path)
+	if cfg.ScaleIP != "192.168.1.50" || cfg.ScalePort != 5002 {
+		t.Errorf("scale = %q:%d, want 192.168.1.50:5002", cfg.ScaleIP, cfg.ScalePort)
+	}
+
+	// Re-running without the scale flags must preserve both values.
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWriteConfig([]string{"--config", path, "--printer", "SP-331"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("re-run exit = %d\nstderr: %s", code, stderr.String())
+	}
+	cfg = loadConfig(t, path)
+	if cfg.ScaleIP != "192.168.1.50" || cfg.ScalePort != 5002 {
+		t.Errorf("scale after re-run = %q:%d, want preserved", cfg.ScaleIP, cfg.ScalePort)
+	}
+}
+
+func TestRunWriteConfig_LoneScaleFlagRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	var stdout, stderr bytes.Buffer
+	code := runWriteConfig([]string{
+		"--config", path,
+		"--scale-ip", "192.168.1.50",
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("exit = %d, want 1 (scale_ip without scale_port)\nstderr: %s", code, stderr.String())
+	}
+}
+
 // loadConfig is a test helper that decodes the on-disk config.json into
 // a config.Config without going through config.Load (which has its
 // DisallowUnknownFields strictness — we want a permissive read here).
