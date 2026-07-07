@@ -53,3 +53,53 @@ type PrintVerifiedRequest struct {
 	Verified   bool   `json:"verified"`
 	ErrorClass string `json:"error_class,omitempty"`
 }
+
+// ScalePLUFileFormat is the only `format` value this agent understands
+// in a scale-plu-file response. Anything else means the cloud moved to
+// a newer file format before this agent was updated — the worker skips
+// the write rather than feeding an unknown format to the scale.
+const ScalePLUFileFormat = "link69_plu_v1"
+
+// ScalePLUFileResponse is the decoded payload of
+// GET /api/pos-agent/scale-plu-file — the rendered PLU file the
+// scale-sync worker mirrors to the local balance directory.
+type ScalePLUFileResponse struct {
+	// Format identifies the file dialect; see ScalePLUFileFormat.
+	Format string `json:"format"`
+	// PathHint is the destination path the cloud shows retailers in the
+	// web UI. The worker writes to its own fixed path and warns if the
+	// hint ever drifts from it.
+	PathHint string `json:"path_hint"`
+	// Content is the full PLU file body to write verbatim.
+	Content string `json:"content"`
+	// SHA256 is the hex digest of Content — used both to verify the
+	// transfer and to skip rewrites of unchanged content.
+	SHA256 string `json:"sha256"`
+	// EntryCount is the number of PLU entries in Content.
+	EntryCount int `json:"entry_count"`
+	// Generated lists products whose scale code was auto-assigned
+	// during this build (the route's write-on-read behavior).
+	Generated []ScalePLUGenerated `json:"generated"`
+	// Skipped lists products excluded from the file, so the agent can
+	// log why the file shrank.
+	Skipped []ScalePLUSkipped `json:"skipped"`
+}
+
+// ScalePLUGenerated is one product that received an auto-assigned PLU
+// code during the file build. Wire shape per the route's explicit
+// snake_case mapping (src/app/api/pos-agent/scale-plu-file/route.ts:
+// generated.map(g => ({ product_id: g.productId, plu: g.plu }))).
+type ScalePLUGenerated struct {
+	ProductID string `json:"product_id"`
+	PLU       string `json:"plu"`
+}
+
+// ScalePLUSkipped is one product the cloud could not render into the
+// PLU file (missing price, missing code, ...). Wire shape per the
+// route's explicit snake_case mapping (skipped.map(s =>
+// ({ product_id: s.productId, reason: s.reason }))) — NOT the camelCase
+// of the internal SkippedScaleRow type it derives from.
+type ScalePLUSkipped struct {
+	ProductID string `json:"product_id"`
+	Reason    string `json:"reason"`
+}

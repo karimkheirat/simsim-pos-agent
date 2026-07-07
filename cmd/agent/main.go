@@ -26,6 +26,7 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/heartbeat"
 	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 	"github.com/karimkheirat/simsim-pos-agent/internal/scale"
+	"github.com/karimkheirat/simsim-pos-agent/internal/scalesync"
 	svcpkg "github.com/karimkheirat/simsim-pos-agent/internal/service"
 )
 
@@ -195,7 +196,8 @@ func runCmd(args []string) {
 		cancel()
 	}()
 
-	// Start the heartbeat loop alongside the server, sharing ctx.
+	// Start the heartbeat + scale-sync loops alongside the server,
+	// sharing ctx.
 	heartbeatDone := make(chan struct{})
 	if rt.Heartbeat != nil {
 		go func() {
@@ -205,12 +207,22 @@ func runCmd(args []string) {
 	} else {
 		close(heartbeatDone)
 	}
+	scaleSyncDone := make(chan struct{})
+	if rt.ScaleSync != nil {
+		go func() {
+			rt.ScaleSync.Run(ctx)
+			close(scaleSyncDone)
+		}()
+	} else {
+		close(scaleSyncDone)
+	}
 
 	if err := rt.Server.Run(ctx); err != nil {
 		logger.Error("server stopped with error", "err", err.Error())
 		os.Exit(1)
 	}
 	<-heartbeatDone
+	<-scaleSyncDone
 	logger.Info("server stopped")
 }
 
@@ -267,6 +279,7 @@ func runAsService() {
 		Server:    rt.Server,
 		Logger:    logger,
 		Heartbeat: rt.Heartbeat,
+		ScaleSync: rt.ScaleSync,
 	}
 	svc, err := ksvc.New(prg, svcpkg.BuildConfig())
 	if err != nil {
@@ -368,6 +381,7 @@ func loadAndOverride(configPath, printerSpec string, port int, logLevel string, 
 type agentRuntime struct {
 	Server    *api.Server
 	Heartbeat *heartbeat.Loop // nil if cloud_base_url is empty
+	ScaleSync *scalesync.Loop // nil if cloud_base_url is empty
 }
 
 // buildRuntime constructs the api.Server (with printer + secrets wired
@@ -456,8 +470,20 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 			Version:  cfg.Version,
 			Interval: time.Duration(cfg.HeartbeatSeconds) * time.Second,
 		}
+		// Scale sync — mirror the cloud-rendered PLU file into the
+		// balance directory the vendor scale software reads. DestPath
+		// is the retailer-facing literal (scalesync.WindowsPLUFilePath)
+		// on Windows; Interval comes from scale_sync_seconds (default
+		// 60 — sha256 dedupe makes the fast cadence cheap).
+		rt.ScaleSync = &scalesync.Loop{
+			Cloud:    cloudClient,
+			Secrets:  secStore,
+			Logger:   logger,
+			DestPath: scalesync.DefaultPLUFilePath(),
+			Interval: time.Duration(cfg.ScaleSyncSeconds) * time.Second,
+		}
 	} else {
-		logger.Warn("cloud_base_url empty; heartbeat loop disabled")
+		logger.Warn("cloud_base_url empty; heartbeat + scale-sync loops disabled")
 	}
 
 	return rt, nil

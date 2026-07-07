@@ -22,6 +22,7 @@ const (
 	pathHeartbeat       = "/api/pos-agent/heartbeat"
 	pathUnpair          = "/api/pos-agent/unpair"
 	pathPrintVerified   = "/api/pos-agent/print-verified"
+	pathScalePLUFile    = "/api/pos-agent/scale-plu-file"
 )
 
 // Client speaks to the cloud's /api/pos-agent/* endpoints. The zero value
@@ -86,6 +87,19 @@ func (c *Client) ReportPrintVerified(
 	ctx context.Context, token string, body PrintVerifiedRequest,
 ) error {
 	return c.do(ctx, http.MethodPost, pathPrintVerified, token, body, nil)
+}
+
+// FetchScalePLUFile retrieves the store's current scale PLU file from
+// GET /api/pos-agent/scale-plu-file. Authenticated with
+// X-Terminal-Token (same gate as /heartbeat). The scale-sync worker
+// polls this and mirrors `content` into the local balance directory
+// that the vendor PC software reads.
+func (c *Client) FetchScalePLUFile(ctx context.Context, token string) (*ScalePLUFileResponse, error) {
+	var data ScalePLUFileResponse
+	if err := c.do(ctx, http.MethodGet, pathScalePLUFile, token, nil, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
 }
 
 // do performs an HTTP request and decodes the response envelope.

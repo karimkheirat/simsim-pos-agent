@@ -422,3 +422,72 @@ func TestCloudError_UnknownCodeFallsBackToInternal(t *testing.T) {
 		t.Errorf("Code() = %q, want BANANA_TIME (preserved)", ce.Code())
 	}
 }
+
+// FetchScalePLUFile ----------------------------------------------------------
+
+func TestFetchScalePLUFile_HappyPath(t *testing.T) {
+	var (
+		seenPath   string
+		seenMethod string
+		seenAuth   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		seenMethod = r.Method
+		seenAuth = r.Header.Get("X-Terminal-Token")
+		writeOKEnvelope(w, http.StatusOK, map[string]any{
+			"format":      "link69_plu_v1",
+			"path_hint":   `C:\ProgramData\Simsim\balance\PLU.txt`,
+			"content":     "PLU FILE BODY\r\n",
+			"sha256":      "abc123",
+			"entry_count": 42,
+			"generated":   []map[string]any{{"product_id": "p1", "plu": "10001"}},
+			"skipped":     []map[string]any{{"product_id": "p2", "reason": "missing_price"}},
+		})
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "0.4.0")
+	resp, err := c.FetchScalePLUFile(context.Background(), "tok_abc")
+	if err != nil {
+		t.Fatalf("FetchScalePLUFile: %v", err)
+	}
+
+	if seenPath != "/api/pos-agent/scale-plu-file" {
+		t.Errorf("path = %q", seenPath)
+	}
+	if seenMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", seenMethod)
+	}
+	if seenAuth != "tok_abc" {
+		t.Errorf("X-Terminal-Token = %q, want tok_abc", seenAuth)
+	}
+	if resp.Format != ScalePLUFileFormat {
+		t.Errorf("format = %q, want %q", resp.Format, ScalePLUFileFormat)
+	}
+	if resp.Content != "PLU FILE BODY\r\n" || resp.SHA256 != "abc123" || resp.EntryCount != 42 {
+		t.Errorf("payload = %+v", resp)
+	}
+	if resp.PathHint != `C:\ProgramData\Simsim\balance\PLU.txt` {
+		t.Errorf("path_hint = %q", resp.PathHint)
+	}
+	if len(resp.Generated) != 1 || resp.Generated[0].ProductID != "p1" || resp.Generated[0].PLU != "10001" {
+		t.Errorf("generated = %+v", resp.Generated)
+	}
+	if len(resp.Skipped) != 1 || resp.Skipped[0].ProductID != "p2" || resp.Skipped[0].Reason != "missing_price" {
+		t.Errorf("skipped = %+v", resp.Skipped)
+	}
+}
+
+func TestFetchScalePLUFile_Unauthenticated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeErrorEnvelope(w, http.StatusUnauthorized, "UNAUTHENTICATED", "Jeton invalide.")
+	}))
+	defer server.Close()
+
+	c := New(server.URL, "0.4.0")
+	_, err := c.FetchScalePLUFile(context.Background(), "tok_revoked")
+	if !errors.Is(err, ErrUnauthenticated) {
+		t.Errorf("err = %v, want ErrUnauthenticated", err)
+	}
+}

@@ -44,6 +44,9 @@ func TestDefaults(t *testing.T) {
 	if c.ReceiptWidthDots != 0 {
 		t.Errorf("ReceiptWidthDots = %d, want 0 (derive)", c.ReceiptWidthDots)
 	}
+	if c.ScaleSyncSeconds != 60 {
+		t.Errorf("ScaleSyncSeconds = %d, want 60", c.ScaleSyncSeconds)
+	}
 }
 
 func TestValidate_ReceiptPrinterLanguage(t *testing.T) {
@@ -222,6 +225,8 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"empty origin in list", func(c *Config) { c.AllowedOrigins = []string{"https://ok.example", ""} }, "allowed_origins"},
 		{"heartbeat_seconds zero", func(c *Config) { c.HeartbeatSeconds = 0 }, "heartbeat_seconds"},
 		{"heartbeat_seconds negative", func(c *Config) { c.HeartbeatSeconds = -5 }, "heartbeat_seconds"},
+		{"scale_sync_seconds zero", func(c *Config) { c.ScaleSyncSeconds = 0 }, "scale_sync_seconds"},
+		{"scale_sync_seconds negative", func(c *Config) { c.ScaleSyncSeconds = -5 }, "scale_sync_seconds"},
 		// M13 A.5a — only 58 and 80 are valid; everything else rejected.
 		{"paper_width_mm zero", func(c *Config) { c.PaperWidthMM = 0 }, "paper_width_mm"},
 		{"paper_width_mm 76 (non-spec)", func(c *Config) { c.PaperWidthMM = 76 }, "paper_width_mm"},

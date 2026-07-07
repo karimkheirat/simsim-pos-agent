@@ -30,6 +30,7 @@ import (
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/api"
 	"github.com/karimkheirat/simsim-pos-agent/internal/heartbeat"
+	"github.com/karimkheirat/simsim-pos-agent/internal/scalesync"
 )
 
 // ServiceName is the SCM identifier — referenced by sc.exe and by the
@@ -63,10 +64,14 @@ type Program struct {
 	// agent is misconfigured with no CloudBaseURL). The api server still
 	// runs.
 	Heartbeat *heartbeat.Loop
+	// ScaleSync is optional. nil → no scale PLU-file mirroring (same
+	// no-cloud condition as Heartbeat).
+	ScaleSync *scalesync.Loop
 
 	cancel        context.CancelFunc
 	serverDone    chan error
 	heartbeatDone chan struct{}
+	scaleSyncDone chan struct{}
 }
 
 // Start is invoked by the SCM (or by service.Run in foreground service
@@ -89,9 +94,18 @@ func (p *Program) Start(_ ksvc.Service) error {
 		}()
 	}
 
+	if p.ScaleSync != nil {
+		p.scaleSyncDone = make(chan struct{})
+		go func() {
+			p.ScaleSync.Run(ctx)
+			close(p.scaleSyncDone)
+		}()
+	}
+
 	p.Logger.Info("service started",
 		"service_name", ServiceName,
-		"heartbeat_enabled", p.Heartbeat != nil)
+		"heartbeat_enabled", p.Heartbeat != nil,
+		"scale_sync_enabled", p.ScaleSync != nil)
 	return nil
 }
 
@@ -116,6 +130,13 @@ func (p *Program) Stop(_ ksvc.Service) error {
 		case <-p.heartbeatDone:
 		case <-time.After(2 * time.Second):
 			return errors.New("service: heartbeat loop did not exit within 2s of stop")
+		}
+	}
+	if p.scaleSyncDone != nil {
+		select {
+		case <-p.scaleSyncDone:
+		case <-time.After(2 * time.Second):
+			return errors.New("service: scale-sync loop did not exit within 2s of stop")
 		}
 	}
 	return nil

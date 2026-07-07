@@ -103,6 +103,13 @@ type Config struct {
 	// network setup screen shows.
 	ScaleIP   string `json:"scale_ip"`
 	ScalePort int    `json:"scale_port"`
+
+	// ScaleSyncSeconds is the interval (seconds) between polls of the
+	// cloud's /api/pos-agent/scale-plu-file by the scale-sync worker
+	// (the LINK69 PLU-file mirror). Default 60 — price edits should
+	// reach the scale within a minute. The worker itself dedupes by
+	// sha256, so a fast cadence does not rewrite unchanged files.
+	ScaleSyncSeconds int `json:"scale_sync_seconds"`
 }
 
 // EffectiveReceiptWidthDots returns the printable receipt width in dots
@@ -165,6 +172,8 @@ func Defaults() Config {
 		// both fields (agent write-config --scale-ip/--scale-port).
 		ScaleIP:   "",
 		ScalePort: 0,
+		// LINK69 PLU-file mirror poll cadence.
+		ScaleSyncSeconds: 60,
 	}
 }
 
@@ -225,6 +234,9 @@ func Validate(c Config) error {
 	}
 	if c.HeartbeatSeconds <= 0 {
 		return fmt.Errorf("config: heartbeat_seconds %d must be > 0", c.HeartbeatSeconds)
+	}
+	if c.ScaleSyncSeconds <= 0 {
+		return fmt.Errorf("config: scale_sync_seconds %d must be > 0", c.ScaleSyncSeconds)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":
