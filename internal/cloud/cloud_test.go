@@ -436,9 +436,10 @@ func TestFetchScalePLUFile_HappyPath(t *testing.T) {
 		seenMethod = r.Method
 		seenAuth = r.Header.Get("X-Terminal-Token")
 		writeOKEnvelope(w, http.StatusOK, map[string]any{
-			"format":      "link69_plu_v1",
+			"format":      "link69_plu_v2",
+			"encoding":    "utf-16le-bom",
 			"path_hint":   `C:\ProgramData\Simsim\balance\PLU.txt`,
-			"content":     "PLU FILE BODY\r\n",
+			"content":     "ID\tName1\t\r\nPLU FILE BODY\t\r\n",
 			"sha256":      "abc123",
 			"entry_count": 42,
 			"generated":   []map[string]any{{"product_id": "p1", "plu": "10001"}},
@@ -465,7 +466,10 @@ func TestFetchScalePLUFile_HappyPath(t *testing.T) {
 	if resp.Format != ScalePLUFileFormat {
 		t.Errorf("format = %q, want %q", resp.Format, ScalePLUFileFormat)
 	}
-	if resp.Content != "PLU FILE BODY\r\n" || resp.SHA256 != "abc123" || resp.EntryCount != 42 {
+	if resp.Encoding != ScalePLUFileEncoding {
+		t.Errorf("encoding = %q, want %q", resp.Encoding, ScalePLUFileEncoding)
+	}
+	if resp.Content != "ID\tName1\t\r\nPLU FILE BODY\t\r\n" || resp.SHA256 != "abc123" || resp.EntryCount != 42 {
 		t.Errorf("payload = %+v", resp)
 	}
 	if resp.PathHint != `C:\ProgramData\Simsim\balance\PLU.txt` {

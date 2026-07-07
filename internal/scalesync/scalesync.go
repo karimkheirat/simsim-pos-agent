@@ -7,14 +7,22 @@
 // context that drives api.Server.Run, ticks at Interval while paired,
 // and rechecks at a faster cadence while unpaired.
 //
-// Write discipline:
-//   - sha256 dedupe — content whose hash matches the last written file
-//     is not rewritten (unless the file has gone missing on disk).
+// Write discipline (v2, main repo commit 59778f0):
+//   - encoding — `content` travels as a normal JSON/UTF-8 string; the
+//     worker transcodes to UTF-16 LE and prepends the FF FE BOM (the
+//     web repo's encodeLink69PluFile is the reference implementation).
+//     The cloud's sha256 is defined over these ENCODED bytes — i.e.
+//     the exact bytes on disk — so dedupe, transfer verification, and
+//     startup seeding all hash encoded bytes.
+//   - sha256 dedupe — content whose encoded hash matches the last
+//     written file is not rewritten (unless the file has gone missing
+//     on disk).
 //   - transfer verification — the cloud-supplied sha256 must match the
-//     hash of the received content, else the write is skipped.
-//   - empty-content guard — a non-empty existing PLU file is NEVER
-//     overwritten with empty content; the last good file is kept and a
-//     warning is logged.
+//     hash of the locally encoded bytes, else the write is skipped.
+//   - header-only guard — v2 content always carries a header row, so
+//     "empty" means "zero data rows". A PLU file containing data rows
+//     is NEVER overwritten with header-only content; the last good
+//     file is kept and a warning is logged.
 //   - atomic writes via config.WriteAtomic (tmp + fsync + rename), so
 //     the scale software never observes a half-written file.
 package scalesync
@@ -27,7 +35,9 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/cloud"
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
@@ -177,6 +187,11 @@ func (l *Loop) process(resp *cloud.ScalePLUFileResponse) {
 			"format", resp.Format, "want", cloud.ScalePLUFileFormat)
 		return
 	}
+	if resp.Encoding != cloud.ScalePLUFileEncoding {
+		l.Logger.Warn("scalesync: unknown PLU file encoding; skipping write (agent update needed?)",
+			"encoding", resp.Encoding, "want", cloud.ScalePLUFileEncoding)
+		return
+	}
 	if resp.PathHint != "" && resp.PathHint != WindowsPLUFilePath {
 		// The web UI tells retailers where the file lives; if the cloud
 		// ever changes the hint, agent and UI must move in lockstep.
@@ -184,10 +199,13 @@ func (l *Loop) process(resp *cloud.ScalePLUFileResponse) {
 			"path_hint", resp.PathHint, "dest", WindowsPLUFilePath)
 	}
 
-	content := []byte(resp.Content)
-	gotSHA := hashHex(content)
+	// Transcode to the exact bytes LINK69 reads from disk. The cloud's
+	// sha256 is defined over THESE bytes, so all hashing below (and the
+	// startup seed, which hashes the raw file) agrees byte-for-byte.
+	encoded := encodeUTF16LEBOM(resp.Content)
+	gotSHA := hashHex(encoded)
 	if resp.SHA256 != "" && resp.SHA256 != gotSHA {
-		l.Logger.Warn("scalesync: content sha256 mismatch; skipping write",
+		l.Logger.Warn("scalesync: encoded-bytes sha256 mismatch; skipping write",
 			"claimed", resp.SHA256, "computed", gotSHA)
 		return
 	}
@@ -201,16 +219,17 @@ func (l *Loop) process(resp *cloud.ScalePLUFileResponse) {
 		return
 	}
 
-	// Safety guard: never replace a non-empty PLU file with nothing.
-	// An empty render (catalog glitch, cloud bug) must not wipe the
-	// scale's last good product list.
-	if len(content) == 0 && fileNonEmpty(l.DestPath) {
-		l.Logger.Warn("scalesync: refusing to overwrite non-empty PLU file with empty content; keeping last good file",
+	// Safety guard: v2 content always includes the header row, so an
+	// "empty" render is header-only (zero data rows). A header-only
+	// render (catalog glitch, cloud bug) must not wipe the scale's
+	// last good product list.
+	if dataRowsText(resp.Content) == 0 && fileHasDataRows(l.DestPath) {
+		l.Logger.Warn("scalesync: refusing to overwrite PLU file containing data rows with header-only content; keeping last good file",
 			"path", l.DestPath, "entry_count", resp.EntryCount)
 		return
 	}
 
-	if err := config.WriteAtomic(l.DestPath, content, 0o644); err != nil {
+	if err := config.WriteAtomic(l.DestPath, encoded, 0o644); err != nil {
 		l.Logger.Error("scalesync: write failed", "path", l.DestPath, "err", err.Error())
 		return
 	}
@@ -218,7 +237,7 @@ func (l *Loop) process(resp *cloud.ScalePLUFileResponse) {
 
 	l.Logger.Info("scalesync: PLU file updated",
 		"path", l.DestPath,
-		"bytes", len(content),
+		"bytes", len(encoded),
 		"entry_count", resp.EntryCount,
 		"sha256", gotSHA,
 		"generated_count", len(resp.Generated),
@@ -234,6 +253,55 @@ func (l *Loop) process(resp *cloud.ScalePLUFileResponse) {
 	}
 }
 
+// encodeUTF16LEBOM transcodes text to the exact bytes LINK69 expects
+// on disk: FF FE BOM + UTF-16 LE code units. Mirrors the web repo's
+// encodeLink69PluFile (src/lib/scale/link69-file.ts) — Go's
+// utf16.Encode produces the same code units (surrogate pairs included)
+// as Node's Buffer.from(text, 'utf16le').
+func encodeUTF16LEBOM(text string) []byte {
+	units := utf16.Encode([]rune(text))
+	buf := make([]byte, 2+2*len(units))
+	buf[0], buf[1] = 0xFF, 0xFE
+	for i, u := range units {
+		buf[2+2*i] = byte(u)
+		buf[3+2*i] = byte(u >> 8)
+	}
+	return buf
+}
+
+// dataRowsText counts data rows (CRLF-terminated lines beyond the
+// header row) in the response's content string. Zero for header-only
+// content — and for completely empty content, which a v2 cloud never
+// sends but which must also trip the guard.
+func dataRowsText(content string) int {
+	lines := strings.Count(content, "\r\n")
+	if lines <= 1 {
+		return 0
+	}
+	return lines - 1
+}
+
+// fileHasDataRows reports whether the on-disk PLU file (UTF-16 LE +
+// BOM) contains at least one data row beyond the header. Counts CRLF
+// code units directly without a full decode; a missing or unreadable
+// file counts as "no data rows" (nothing to protect).
+func fileHasDataRows(path string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	if len(b) >= 2 && b[0] == 0xFF && b[1] == 0xFE {
+		b = b[2:]
+	}
+	crlf := 0
+	for i := 0; i+3 < len(b); i += 2 {
+		if b[i] == 0x0D && b[i+1] == 0x00 && b[i+2] == 0x0A && b[i+3] == 0x00 {
+			crlf++
+		}
+	}
+	return crlf > 1
+}
+
 func hashHex(b []byte) string {
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -242,9 +310,4 @@ func hashHex(b []byte) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-func fileNonEmpty(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Size() > 0
 }

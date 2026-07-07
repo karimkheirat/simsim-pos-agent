@@ -58,7 +58,17 @@ type PrintVerifiedRequest struct {
 // in a scale-plu-file response. Anything else means the cloud moved to
 // a newer file format before this agent was updated — the worker skips
 // the write rather than feeding an unknown format to the scale.
-const ScalePLUFileFormat = "link69_plu_v1"
+//
+// v2 (main repo commit 59778f0): renderer reconciled against a real
+// LB1H export — header row + 98 tab-separated fields per line, and the
+// on-disk encoding became UTF-16 LE with BOM (see ScalePLUFileEncoding).
+const ScalePLUFileFormat = "link69_plu_v2"
+
+// ScalePLUFileEncoding is the only `encoding` value this agent
+// understands: the agent transcodes `content` to UTF-16 LE and
+// prepends the FF FE BOM before writing (the web repo's
+// encodeLink69PluFile is the reference implementation).
+const ScalePLUFileEncoding = "utf-16le-bom"
 
 // ScalePLUFileResponse is the decoded payload of
 // GET /api/pos-agent/scale-plu-file — the rendered PLU file the
@@ -66,14 +76,20 @@ const ScalePLUFileFormat = "link69_plu_v1"
 type ScalePLUFileResponse struct {
 	// Format identifies the file dialect; see ScalePLUFileFormat.
 	Format string `json:"format"`
+	// Encoding names the on-disk byte encoding the agent must produce;
+	// see ScalePLUFileEncoding.
+	Encoding string `json:"encoding"`
 	// PathHint is the destination path the cloud shows retailers in the
 	// web UI. The worker writes to its own fixed path and warns if the
 	// hint ever drifts from it.
 	PathHint string `json:"path_hint"`
-	// Content is the full PLU file body to write verbatim.
+	// Content is the full PLU file text (header row + data rows, CRLF)
+	// as a normal JSON/UTF-8 string; the worker transcodes it per
+	// Encoding before writing.
 	Content string `json:"content"`
-	// SHA256 is the hex digest of Content — used both to verify the
-	// transfer and to skip rewrites of unchanged content.
+	// SHA256 is the hex digest of the ENCODED bytes the agent writes
+	// (BOM + UTF-16 LE) — NOT of the JSON string. Used both to verify
+	// the transfer and to skip rewrites of unchanged content.
 	SHA256 string `json:"sha256"`
 	// EntryCount is the number of PLU entries in Content.
 	EntryCount int `json:"entry_count"`
