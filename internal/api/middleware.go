@@ -76,9 +76,8 @@ func (s *Server) requireTerminalToken(next http.HandlerFunc) http.HandlerFunc {
 // docs/agent-handshake-protocol.md §10.1 and avoids ambiguous
 // double-evaluation.
 //
-// /drawer/open and /status are intentionally NOT moved to requireAuth
-// in A.1 — they stay on requireTerminalToken. They aren't print
-// operations and aren't in the A.1 scope.
+// /drawer/open joined requireAuth on 2026-09-23 (the web till kicks the
+// drawer with its handshake JWT). /status stays on requireTerminalToken.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.secrets == nil {

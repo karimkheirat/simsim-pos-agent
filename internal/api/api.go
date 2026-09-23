@@ -231,9 +231,13 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// product PLU table to the LAN label scale. Same JWT gate as /print;
 	// surfaces 503 NO_SCALE_CONFIGURED when no scale is wired.
 	mux.HandleFunc("POST /scale/sync-plu", s.requireAuth(s.handleSyncPLU))
-	// /drawer/open + /status are NOT print operations and are out of
-	// the A.1 scope — they stay on the legacy X-Terminal-Token gate.
-	mux.HandleFunc("POST /drawer/open", s.requireTerminalToken(s.handleDrawerOpen))
+	// /drawer/open moves to requireAuth (2026-09-23): the web till now
+	// opens the drawer itself at the commit of every act that moves cash
+	// (a cash sale, a cash refund, an entrée/sortie, the float, the count,
+	// and a no-sale opening) — and it holds the handshake JWT, not the
+	// terminal token. requireAuth still accepts the legacy X-Terminal-Token,
+	// so older web clients keep working. /status stays on the legacy gate.
+	mux.HandleFunc("POST /drawer/open", s.requireAuth(s.handleDrawerOpen))
 	mux.HandleFunc("GET /status", s.requireTerminalToken(s.handleStatus))
 
 	// Outer → inner: recover, requestLog, checkLoopback, cors, mux.
