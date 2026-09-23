@@ -229,8 +229,9 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 	// Payment block. v1 supports cash only.
 	blank()
 	if r.Payment.Method == "cash" {
-		emit(formatTotalLine("Espèces", r.Payment.Tendered, w.receipt), 1, 1, false, true)
-		emit(formatTotalLine("Rendu", r.Payment.Change, w.receipt), 1, 1, false, true)
+		words := labelsFor(r) // SIM-170: change reads "Monnaie", or the word sent
+		emit(formatTotalLine(words.Cash, r.Payment.Tendered, w.receipt), 1, 1, false, true)
+		emit(formatTotalLine(words.Change, r.Payment.Change, w.receipt), 1, 1, false, true)
 	} else {
 		emit("Paiement: "+r.Payment.Method, 1, 1, false, true)
 	}

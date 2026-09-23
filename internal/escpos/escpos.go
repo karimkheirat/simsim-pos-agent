@@ -173,3 +173,89 @@ func (b *Builder) DrawerKick() *Builder {
 	b.buf = append(b.buf, DrawerKick()...)
 	return b
 }
+
+// Size returns GS ! n with explicit width and height multipliers, each
+// clamped to 1..8 (the ESC/POS range). Size(1, 1) is normal size and is
+// byte-identical to DoubleSize(false).
+func Size(width, height int) []byte {
+	clamp := func(v int) byte {
+		if v < 1 {
+			v = 1
+		}
+		if v > 8 {
+			v = 8
+		}
+		return byte(v - 1)
+	}
+	return []byte{0x1D, 0x21, clamp(width)<<4 | clamp(height)}
+}
+
+// CharSpacing returns ESC SP n — extra dots to the right of every
+// character (1B 20 n). 0 is the printer default.
+func CharSpacing(dots byte) []byte {
+	return []byte{0x1B, 0x20, dots}
+}
+
+// HRIPosition values for GS H n (where the printer prints the barcode's
+// human-readable text).
+const (
+	HRINone  byte = 0
+	HRIBelow byte = 2
+)
+
+// ErrBarcodeData is returned by Code128 when the data cannot be encoded
+// in Code 128 set B (printable ASCII 0x20–0x7E only) or is empty/too long.
+type ErrBarcodeData struct{ Reason string }
+
+func (e ErrBarcodeData) Error() string { return "escpos: code128: " + e.Reason }
+
+// Code128Modules returns how many modules (narrowest bar widths) a Code
+// 128 set B symbol for data occupies, quiet zones excluded: start (11) +
+// 11 per character + check (11) + stop (13). Multiply by the GS w module
+// width to get dots.
+func Code128Modules(data string) int {
+	return 11 + 11*len(data) + 11 + 13
+}
+
+// Code128 returns the bytes to print data as a Code 128 barcode in code
+// set B: GS H (HRI position), GS h (height in dots), GS w (module width in
+// dots), GS k 73 n "{B" data. A literal '{' in data is sent as "{{", the
+// escape GS k function B requires.
+func Code128(data string, heightDots, moduleDots, hri byte) ([]byte, error) {
+	if data == "" {
+		return nil, ErrBarcodeData{"empty"}
+	}
+	payload := []byte{'{', 'B'}
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if c < 0x20 || c > 0x7E {
+			return nil, ErrBarcodeData{"non-printable or non-ASCII byte"}
+		}
+		payload = append(payload, c)
+		if c == '{' {
+			payload = append(payload, '{')
+		}
+	}
+	if len(payload) > 255 {
+		return nil, ErrBarcodeData{"too long"}
+	}
+	out := []byte{
+		0x1D, 0x48, hri,
+		0x1D, 0x68, heightDots,
+		0x1D, 0x77, moduleDots,
+		0x1D, 0x6B, 73, byte(len(payload)),
+	}
+	return append(out, payload...), nil
+}
+
+// Size appends GS ! n with the given multipliers.
+func (b *Builder) Size(width, height int) *Builder {
+	b.buf = append(b.buf, Size(width, height)...)
+	return b
+}
+
+// CharSpacing appends ESC SP n.
+func (b *Builder) CharSpacing(dots byte) *Builder {
+	b.buf = append(b.buf, CharSpacing(dots)...)
+	return b
+}
