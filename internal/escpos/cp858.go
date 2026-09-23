@@ -42,6 +42,11 @@ var cp858Map = map[rune][]byte{
 	'Ô': {0xE2},
 	'Ù': {0xEB},
 	'Û': {0xEA},
+	'Ä': {0x8E},
+	'Ë': {0xD3},
+	'Ï': {0xD8},
+	'Ö': {0x99},
+	'Ü': {0x9A},
 
 	// Symbols present in CP858
 	'€': {0xD5},
@@ -49,10 +54,18 @@ var cp858Map = map[rune][]byte{
 	'«': {0xAE},
 	'»': {0xAF},
 	'£': {0x9C},
+	'×': {0x9E}, // "2 × 120 DA" — a line's working on the ticket
+	'·': {0xFA}, // "Caisse 02 · Amine B." — the head's joiner
 
 	// Transliterations for characters not in CP858
-	' ': []byte(" "),   // non-breaking space → regular space
+	' ':      []byte(" "),   // non-breaking space → regular space
 	'…':      []byte("..."), // U+2026 horizontal ellipsis
+	'\u202F': []byte(" "),   // narrow no-break space (fr-FR digit grouping) → space
+	'−':      []byte("-"),   // U+2212 minus sign — the web's money minus
+	'—':      []byte("-"),   // U+2014 em dash — "Lait — 1 L" variant joiner
+	'–':      []byte("-"),   // U+2013 en dash
+	'’':      []byte("'"),   // U+2019 right single quote — "l’article"
+	'Ÿ':      []byte("Y"),   // U+0178 — not in CP858
 	'œ':      []byte("oe"),  // U+0153 — not in CP858
 	'Œ':      []byte("OE"),  // U+0152 — not in CP858
 }

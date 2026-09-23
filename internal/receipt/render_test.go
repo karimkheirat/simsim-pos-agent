@@ -263,7 +263,7 @@ func extractText(data []byte) string {
 			switch data[i+1] {
 			case 0x40: // ESC @ (Init) — 2 bytes
 				i += 2
-			case 0x74, 0x45, 0x61: // ESC t / E / a + 1-byte param — 3 bytes
+			case 0x74, 0x45, 0x61, 0x20: // ESC t / E / a / SP + 1-byte param — 3 bytes
 				i += 3
 			case 0x70: // ESC p m t1 t2 — 5 bytes
 				i += 5
@@ -276,8 +276,14 @@ func extractText(data []byte) string {
 				continue
 			}
 			switch data[i+1] {
-			case 0x21, 0x56: // GS ! / GS V + 1-byte param — 3 bytes
+			case 0x21, 0x56, 0x48, 0x68, 0x77: // GS ! / V / H / h / w + 1-byte param — 3 bytes
 				i += 3
+			case 0x6B: // GS k m n d1..dn (function B) — the barcode's data is not text
+				if i+3 < len(data) {
+					i += 4 + int(data[i+3])
+				} else {
+					i = len(data)
+				}
 			default:
 				i += 2
 			}

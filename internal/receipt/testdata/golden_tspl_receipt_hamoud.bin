@@ -23,7 +23,7 @@ TEXT 0,396,"2",0,1,1,"Sous-total                          270,00"
 TEXT 0,420,"2",0,1,1,"Remise                              -13,50"
 TEXT 0,444,"2",0,1,2,"Total                           256,50 DZD"
 TEXT 0,512,"2",0,1,1,"Espèces                             300,00"
-TEXT 0,536,"2",0,1,1,"Rendu                                43,50"
+TEXT 0,536,"2",0,1,1,"Monnaie                              43,50"
 TEXT 162,584,"2",0,1,1,"Merci de votre visite"
 TEXT 174,608,"2",0,1,1,"Conservez ce ticket"
 PRINT 1,1

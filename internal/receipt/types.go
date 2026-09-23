@@ -21,6 +21,30 @@ type Receipt struct {
 	Totals        Totals     `json:"totals"`
 	Payment       Payment    `json:"payment"`
 	FooterLines   []string   `json:"footer_lines"`
+
+	// SIM-170 (DESIGN_SYSTEM §67.2/§67.5) — optional words the web app MAY
+	// send so the paper reads in the till's language. Every one is optional:
+	// absent, the renderer infers what it can from the fields above (see
+	// render.go) and falls back to French defaults.
+
+	// DocumentTitle is the document's name ("TICKET DE CAISSE", "TICKET DE
+	// REMBOURSEMENT", "RAPPORT DE CAISSE"). Absent → inferred.
+	DocumentTitle string `json:"document_title,omitempty"`
+	// Shopper is the head's shopper line ("Client K7M2QX · Karim B.").
+	Shopper string `json:"shopper,omitempty"`
+	// Labels are the words of the totals and tender block.
+	Labels *Labels `json:"labels,omitempty"`
+}
+
+// Labels are the fixed words the ticket prints around the figures. Any
+// empty field falls back to the French default in render.go.
+type Labels struct {
+	Subtotal  string `json:"subtotal,omitempty"`  // "Sous-total"
+	Discounts string `json:"discounts,omitempty"` // "Remises"
+	Tax       string `json:"tax,omitempty"`       // "TVA"
+	Total     string `json:"total,omitempty"`     // "TOTAL"
+	Cash      string `json:"cash,omitempty"`      // "Espèces"
+	Change    string `json:"change,omitempty"`    // "Monnaie"
 }
 
 // Store is the merchant identification block printed at the top.
@@ -51,6 +75,21 @@ type Line struct {
 	UnitPrice     float64 `json:"unit_price"`
 	LineTotal     float64 `json:"line_total"`
 	DiscountLabel *string `json:"discount_label"`
+
+	// SIM-170 — optional.
+
+	// Detail is the line's working printed under its name ("2 × 120 DA",
+	// "0,342 kg × 380 DA/kg"). Absent → the renderer writes "qty × unit".
+	Detail string `json:"detail,omitempty"`
+	// Kind is "money" or "count" — how a rapport row's value prints
+	// ("18 378 DA" vs "7"). Absent on a rapport row → a bare number.
+	// Ticket lines are always money.
+	Kind string `json:"kind,omitempty"`
+	// Section is a rapport row's block title ("VENTES", "CAISSE"). A
+	// change of section prints a dashed rule and the title in bold.
+	Section string `json:"section,omitempty"`
+	// Bold prints the row in bold (the rapport's "Écart").
+	Bold bool `json:"bold,omitempty"`
 }
 
 // Discount is a top-level adjustment applied to the receipt subtotal.
