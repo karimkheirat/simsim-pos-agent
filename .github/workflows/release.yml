@@ -124,6 +124,35 @@ jobs:
           echo "Operators will see a SmartScreen 'unrecognized app' warning at install time."
           echo "This is the M4 expected state per spec §2."
 
+      # Self-update assets (POS_AGENT_SPEC.md §9.1). The running agent
+      # downloads the BARE agent.exe (not the installer) and verifies it
+      # against the .sha256 file, whose content the cloud republishes as
+      # `agent_sha256` on /api/pos-agent/release/latest.
+      #
+      # .sha256 format: exactly 64 lowercase hex characters — no filename,
+      # no trailing newline, no BOM. Written with printf '%s' so nothing
+      # else can creep in; the step fails if the result is not 64 hex.
+      #
+      # Runs after the signing steps: if agent.exe is ever signed, the
+      # hash must be of the signed bytes.
+      - name: Stage self-update assets
+        id: agent_asset
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          NAME="simsim-pos-agent_${VERSION}_windows_amd64.exe"
+          mkdir -p build/release
+          cp build/agent.exe "build/release/${NAME}"
+          SUM="$(sha256sum "build/release/${NAME}" | cut -d' ' -f1 | tr 'A-F' 'a-f')"
+          if ! [[ "$SUM" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "bad sha256: '$SUM'" >&2
+            exit 1
+          fi
+          printf '%s' "$SUM" > "build/release/${NAME}.sha256"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          ls -l build/release/
+          echo "sha256: $SUM"
+
       # Release creation only on tag push. workflow_dispatch runs are
       # build-verification only — they don't produce a release because
       # there's no tag to attach to.
@@ -139,8 +168,13 @@ jobs:
             ## Install
             Download `simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe` from the assets below and double-click. Requires admin (UAC prompt). Installs as a Windows service.
 
+            The bare `simsim-pos-agent_${{ steps.version.outputs.version }}_windows_amd64.exe` (+ `.sha256`) is for the agent's self-update — installed agents fetch it themselves between 03:00 and 05:00. Not for manual install.
+
             ## Changes
             See commit history for changes since the previous release.
-          files: build/installer/simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe
+          files: |
+            build/installer/simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe
+            build/release/${{ steps.agent_asset.outputs.name }}
+            build/release/${{ steps.agent_asset.outputs.name }}.sha256
           draft: false
           make_latest: true

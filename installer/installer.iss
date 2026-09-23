@@ -64,10 +64,22 @@ Name: "english"; MessagesFile: "compiler:Default.isl,lang\en.isl"
 Source: "..\build\agent.exe";    DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\build\agentctl.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
+[Dirs]
+; Data dirs the service writes, created here (as admin) so the icacls
+; grants in [Run] Step 2b have something to act on. POSAgent\update holds
+; the self-updater's new.exe / pending.json / last-rollback.json; balance
+; is where scale sync mirrors PLU.txt.
+Name: "{commonappdata}\Simsim\POSAgent"
+Name: "{commonappdata}\Simsim\POSAgent\logs"
+Name: "{commonappdata}\Simsim\POSAgent\update"
+Name: "{commonappdata}\Simsim\balance"
+
 [Run]
 ; Post-install sequence (AG5):
 ;   1. write-config: seed config.json with AG3 printer choice + cloud URL.
-;   2. service install: register the Windows service.
+;   2. service install: register the Windows service (or, on upgrade,
+;      reconfigure the existing one — logon account, recovery actions).
+;   2b. icacls: grant the service's virtual account its directories.
 ;   3. service start: bring the service up.
 ;
 ; All three are blocking — failure on any of them surfaces Inno's stock
@@ -92,6 +104,30 @@ Filename: "{app}\bin\agent.exe"; Parameters: "service install"; \
   StatusMsg: "{cm:RunStatusServiceInstall}"; \
   Flags: runhidden waituntilterminated
 
+; Step 2b: permissions for the service's own identity. Since 2026-09-23
+; the service runs as the virtual account NT SERVICE\SimsimPOSAgent (a
+; per-service SID, no shared rights, not SYSTEM — set by `service
+; install` above, which also MOVES an existing LocalService install to
+; it). That name only resolves once the service exists, so these grants
+; MUST stay after Step 2. Modify on:
+;   - {app}\bin — the self-updater renames agent.exe <-> agent.exe.old
+;     and agent.exe.new -> agent.exe here (POS_AGENT_SPEC.md 9.5);
+;   - {commonappdata}\Simsim\POSAgent — config.json + secrets.dat (read;
+;     secrets.dat also deleted on a cloud 401), logs\agent.log, update\;
+;   - {commonappdata}\Simsim\balance — the scale PLU file (PLU.txt).
+; (OI)(CI) also propagates to files already there, e.g. an agent.log or
+; PLU.txt created by the old LocalService identity. Inno does not check
+; icacls' exit code; the grants are idempotent on reinstall.
+Filename: "{sys}\icacls.exe"; \
+  Parameters: """{app}\bin"" /grant ""NT SERVICE\SimsimPOSAgent:(OI)(CI)M"""; \
+  Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; \
+  Parameters: """{commonappdata}\Simsim\POSAgent"" /grant ""NT SERVICE\SimsimPOSAgent:(OI)(CI)M"""; \
+  Flags: runhidden waituntilterminated
+Filename: "{sys}\icacls.exe"; \
+  Parameters: """{commonappdata}\Simsim\balance"" /grant ""NT SERVICE\SimsimPOSAgent:(OI)(CI)M"""; \
+  Flags: runhidden waituntilterminated
+
 ; Step 3: start it.
 Filename: "{app}\bin\agent.exe"; Parameters: "service start"; \
   StatusMsg: "{cm:RunStatusServiceStart}"; \
@@ -109,6 +145,14 @@ Filename: "{app}\bin\agent.exe"; Parameters: "service stop"; \
   RunOnceId: "agent-service-stop"; Flags: runhidden
 Filename: "{app}\bin\agent.exe"; Parameters: "service uninstall"; \
   RunOnceId: "agent-service-uninstall"; Flags: runhidden
+
+[UninstallDelete]
+; Self-update leftovers Inno did not install itself (the rollback copy,
+; a parked bad build, a half-staged swap) would otherwise keep
+; {app}\bin from being removed.
+Type: files; Name: "{app}\bin\agent.exe.old"
+Type: files; Name: "{app}\bin\agent.exe.bad"
+Type: files; Name: "{app}\bin\agent.exe.new"
 
 [Icons]
 Name: "{group}\Simsim POS Agent — Statut"; Filename: "{app}\bin\agentctl.exe"; \
@@ -672,6 +716,26 @@ begin
 end;
 
 // --- Wizard lifecycle hooks ---
+
+// PrepareToInstall runs after the wizard, BEFORE [Files] copies.
+// On an upgrade the service is running and holds {app}\bin\agent.exe
+// open, so stop it first with the INSTALLED binary (any version
+// understands `service stop`; kardianos waits for STOPPED). This also
+// makes the logon-account move land: `service install` in [Run] changes
+// the account of a stopped service, and `service start` then starts it
+// as NT SERVICE\SimsimPOSAgent on the new binary. Fresh install: no
+// agent.exe yet, nothing to stop. A failed stop is tolerated — Inno's
+// own in-use handling is the fallback.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  InstalledExe: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  InstalledExe := ExpandConstant('{app}\bin\agent.exe');
+  if FileExists(InstalledExe) then
+    Exec(InstalledExe, 'service stop', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
 
 procedure InitializeWizard;
 begin

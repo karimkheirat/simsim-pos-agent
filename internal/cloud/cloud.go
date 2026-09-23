@@ -23,6 +23,7 @@ const (
 	pathUnpair          = "/api/pos-agent/unpair"
 	pathPrintVerified   = "/api/pos-agent/print-verified"
 	pathScalePLUFile    = "/api/pos-agent/scale-plu-file"
+	pathReleaseLatest   = "/api/pos-agent/release/latest"
 )
 
 // Client speaks to the cloud's /api/pos-agent/* endpoints. The zero value
@@ -97,6 +98,19 @@ func (c *Client) ReportPrintVerified(
 func (c *Client) FetchScalePLUFile(ctx context.Context, token string) (*ScalePLUFileResponse, error) {
 	var data ScalePLUFileResponse
 	if err := c.do(ctx, http.MethodGet, pathScalePLUFile, token, nil, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
+// LatestRelease fetches the newest published agent release from
+// GET /api/pos-agent/release/latest. Unauthenticated — the release
+// manifest is public (the binary it points at is a public release
+// asset, and integrity comes from AgentSHA256, not from secrecy).
+// The self-updater polls this once per release_check_seconds.
+func (c *Client) LatestRelease(ctx context.Context) (*ReleaseInfo, error) {
+	var data ReleaseInfo
+	if err := c.do(ctx, http.MethodGet, pathReleaseLatest, "", nil, &data); err != nil {
 		return nil, err
 	}
 	return &data, nil

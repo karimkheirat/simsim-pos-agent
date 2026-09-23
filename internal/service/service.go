@@ -37,6 +37,17 @@ import (
 // Status query. Spec §5.1.
 const ServiceName = "SimsimPOSAgent"
 
+// ServiceAccount is the Windows virtual service account the service runs
+// as: a per-service identity (SID S-1-5-80-<hash of the name>) that the
+// SCM manages itself — no password, no rights shared with any other
+// service, and not SYSTEM. It replaced NT AUTHORITY\LocalService on
+// 2026-09-23 so the self-updater can be granted write access to its own
+// bin directory without extending that right to every LocalService
+// process on the PC. The installer grants this name Modify on {app}in
+// and %ProgramData%\Simsim (icacls "NT SERVICE\SimsimPOSAgent"), which
+// only resolves once the service exists.
+const ServiceAccount = `NT SERVICE\` + ServiceName
+
 // BuildConfig returns the kardianos/service Config. Stable for the
 // lifetime of this binary; used by both `service install` and the
 // service-runtime path so install + run agree on identity.
@@ -45,12 +56,13 @@ func BuildConfig() *ksvc.Config {
 		Name:        ServiceName,
 		DisplayName: "Simsim POS Agent",
 		Description: "Local printer agent for Simsim POS — handles receipt printing and cash drawer control.",
-		// Account choice per spec §5.1: LocalService is sufficient for
-		// raw spooler print jobs to a shared local printer. If an
-		// install hits a printer that refuses LocalService, the manual
-		// fix is to re-install under a user account (sc.exe config /
-		// kardianos --user flag in M3 polish).
-		UserName: `NT AUTHORITY\LocalService`,
+		// Virtual service account (see ServiceAccount). Like
+		// LocalService it is a low-privilege local identity, so raw
+		// spooler jobs to a local printer work the same way. Virtual
+		// accounts take no password — kardianos passes Option
+		// "Password" (unset → "") to CreateService. Existing installs
+		// created under LocalService are moved by postInstall.
+		UserName: ServiceAccount,
 	}
 }
 
@@ -67,11 +79,22 @@ type Program struct {
 	// ScaleSync is optional. nil → no scale PLU-file mirroring (same
 	// no-cloud condition as Heartbeat).
 	ScaleSync *scalesync.Loop
+	// Updater is optional. nil → no self-update loop and no post-update
+	// cleanup (internal/updater; POS_AGENT_SPEC.md §9).
+	Updater Runner
 
 	cancel        context.CancelFunc
 	serverDone    chan error
 	heartbeatDone chan struct{}
 	scaleSyncDone chan struct{}
+	updaterDone   chan struct{}
+}
+
+// Runner is a background loop bound to the service context. The
+// self-updater satisfies it; declared here so service does not import
+// internal/updater.
+type Runner interface {
+	Run(ctx context.Context)
 }
 
 // Start is invoked by the SCM (or by service.Run in foreground service
@@ -102,11 +125,43 @@ func (p *Program) Start(_ ksvc.Service) error {
 		}()
 	}
 
+	if p.Updater != nil {
+		p.updaterDone = make(chan struct{})
+		go func() {
+			p.Updater.Run(ctx)
+			close(p.updaterDone)
+		}()
+	}
+
 	p.Logger.Info("service started",
 		"service_name", ServiceName,
 		"heartbeat_enabled", p.Heartbeat != nil,
-		"scale_sync_enabled", p.ScaleSync != nil)
+		"scale_sync_enabled", p.ScaleSync != nil,
+		"updater_enabled", p.Updater != nil)
 	return nil
+}
+
+// ShutdownForRestart stops the HTTP server gracefully (in-flight
+// requests finish, bounded by api's 5 s shutdown timeout) and returns,
+// so the self-updater can exit the process non-zero right after the
+// binary swap. It deliberately does NOT wait for the updater loop — it
+// is called FROM that loop. The SCM sees the process die without a
+// SERVICE_STOPPED report and applies the recovery action (restart after
+// 10 s), which starts the new binary.
+func (p *Program) ShutdownForRestart() {
+	p.Logger.Info("service: shutting down for self-update restart")
+	if p.cancel == nil {
+		return
+	}
+	p.cancel()
+	select {
+	case err := <-p.serverDone:
+		if err != nil {
+			p.Logger.Error("service: server returned error on update shutdown", "err", err.Error())
+		}
+	case <-time.After(10 * time.Second):
+		p.Logger.Warn("service: server did not stop within 10s; exiting anyway")
+	}
 }
 
 // Stop is invoked by the SCM. Cancels the shared context and blocks up
@@ -139,6 +194,13 @@ func (p *Program) Stop(_ ksvc.Service) error {
 			return errors.New("service: scale-sync loop did not exit within 2s of stop")
 		}
 	}
+	if p.updaterDone != nil {
+		select {
+		case <-p.updaterDone:
+		case <-time.After(2 * time.Second):
+			return errors.New("service: updater loop did not exit within 2s of stop")
+		}
+	}
 	return nil
 }
 
@@ -151,14 +213,44 @@ func (p *Program) Stop(_ ksvc.Service) error {
 // leave the service installed (kardianos already created the SCM entry)
 // but missing the failure-recovery polish — the operator can re-run
 // install or configure via sc.exe.
+//
+// Idempotent (2026-09-23): when the service is ALREADY registered — an
+// upgrade over an existing install — the create step is skipped and
+// postInstall still runs. postInstall is what moves an old install's
+// logon account from LocalService to the virtual account, so the
+// installer's `service install` step converges every install on the same
+// configuration whether it is fresh or an upgrade.
 func Install(svc ksvc.Service) error {
-	if err := ksvc.Control(svc, "install"); err != nil {
-		return fmt.Errorf("install: %w", err)
+	return installWithDeps(svc, statusImpl, postInstall)
+}
+
+// installWithDeps is the testable variant of Install.
+func installWithDeps(svc ksvc.Service, status func() (string, error), post func() error) error {
+	state, err := status()
+	if err != nil {
+		return fmt.Errorf("install: query existing service: %w", err)
 	}
-	if err := postInstall(); err != nil {
-		return fmt.Errorf("post-install (service installed; recovery actions unset): %w", err)
+	if state == "not installed" || !isWindowsState(state) {
+		if err := ksvc.Control(svc, "install"); err != nil {
+			return fmt.Errorf("install: %w", err)
+		}
+	}
+	if err := post(); err != nil {
+		return fmt.Errorf("post-install (service registered; account/recovery settings not applied): %w", err)
 	}
 	return nil
+}
+
+// isWindowsState reports whether state is one statusImpl returns for a
+// service that EXISTS in the SCM. Off Windows statusImpl returns
+// "unsupported on this platform", which must still go through the
+// kardianos create path.
+func isWindowsState(state string) bool {
+	switch state {
+	case "stopped", "starting", "stopping", "running", "continuing", "pausing", "paused", "unknown":
+		return true
+	}
+	return false
 }
 
 // Uninstall removes the service from the OS service manager. If the

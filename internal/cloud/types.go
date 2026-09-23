@@ -119,3 +119,19 @@ type ScalePLUSkipped struct {
 	ProductID string `json:"product_id"`
 	Reason    string `json:"reason"`
 }
+
+// ReleaseInfo is the decoded payload of GET /api/pos-agent/release/latest
+// — the manifest the self-updater (internal/updater) reads.
+//
+// AgentDownloadURL + AgentSHA256 are pointers because the cloud sends
+// JSON null when the release has no bare agent.exe asset (releases cut
+// before the self-update pipeline shipped only the installer). The
+// updater acts only when BOTH are non-nil; the installer URL is for
+// humans and first installs, never for the updater.
+type ReleaseInfo struct {
+	Version          string  `json:"version"`
+	DownloadURL      string  `json:"download_url"`
+	PublishedAt      string  `json:"published_at"`
+	AgentDownloadURL *string `json:"agent_download_url"`
+	AgentSHA256      *string `json:"agent_sha256"`
+}

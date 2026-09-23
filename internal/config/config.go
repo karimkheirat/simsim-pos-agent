@@ -110,6 +110,18 @@ type Config struct {
 	// reach the scale within a minute. The worker itself dedupes by
 	// sha256, so a fast cadence does not rewrite unchanged files.
 	ScaleSyncSeconds int `json:"scale_sync_seconds"`
+
+	// ReleaseCheckSeconds is the interval (seconds) between polls of the
+	// cloud's /api/pos-agent/release/latest by the self-updater
+	// (internal/updater, POS_AGENT_SPEC.md section 9). Default 86400 (once
+	// a day). The first check runs ~5 min after the service starts.
+	ReleaseCheckSeconds int `json:"release_check_seconds"`
+
+	// AutoUpdate enables the self-updater in service mode. Default true.
+	// false = the agent never downloads or swaps its own binary (updates
+	// then come only from re-running the installer). Startup rollback of
+	// a previously-applied update still runs regardless.
+	AutoUpdate bool `json:"auto_update"`
 }
 
 // EffectiveReceiptWidthDots returns the printable receipt width in dots
@@ -174,6 +186,9 @@ func Defaults() Config {
 		ScalePort: 0,
 		// LINK69 PLU-file mirror poll cadence.
 		ScaleSyncSeconds: 60,
+		// Self-update — daily release check, on by default.
+		ReleaseCheckSeconds: 86400,
+		AutoUpdate:          true,
 	}
 }
 
@@ -237,6 +252,9 @@ func Validate(c Config) error {
 	}
 	if c.ScaleSyncSeconds <= 0 {
 		return fmt.Errorf("config: scale_sync_seconds %d must be > 0", c.ScaleSyncSeconds)
+	}
+	if c.ReleaseCheckSeconds <= 0 {
+		return fmt.Errorf("config: release_check_seconds %d must be > 0", c.ReleaseCheckSeconds)
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -337,6 +355,16 @@ func DefaultLogPath() string {
 		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "logs", "agent.log")
 	}
 	return "./agent.log"
+}
+
+// DefaultUpdateDir returns the directory the self-updater stages
+// downloads and its markers in: %ProgramData%\Simsim\POSAgent\update
+// on Windows, ./update elsewhere.
+func DefaultUpdateDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Simsim", "POSAgent", "update")
+	}
+	return "./update"
 }
 
 // programDataDir returns %ProgramData% with a sensible fallback. Only

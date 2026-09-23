@@ -4,6 +4,8 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -11,16 +13,24 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-// postInstall enriches the kardianos-installed service with two
-// Windows-specific configurations the kardianos v1.1.0 Config doesn't
-// expose:
+// postInstall brings the registered service to its required
+// configuration. Idempotent — Install runs it on fresh installs AND on
+// upgrades over an existing service, and every step converges:
 //
-//  1. DelayedAutoStart = true. Avoids competing with boot-critical
+//  1. Logon account = ServiceAccount (NT SERVICE\SimsimPOSAgent), with an
+//     explicit EMPTY password (virtual accounts have none). Installs made
+//     before 2026-09-23 ran as NT AUTHORITY\LocalService; this is what
+//     moves them. The change applies at the next service start — the
+//     installer stops the service before copying files and starts it
+//     after this step.
+//  2. Service SID type = unrestricted, so the per-service SID is in the
+//     process token (the SID the installer's icacls grants target).
+//  3. DelayedAutoStart = true. Avoids competing with boot-critical
 //     services during the post-boot rush; the spooler is rarely ready
 //     immediately after boot anyway.
-//  2. SetRecoveryActions: restart at 10s, then 30s, then 60s, with a
-//     60-second reset period (any 60s of healthy uptime resets the
-//     failure counter).
+//  4. SetRecoveryActions: restart at 10s, then 30s, then 60s, with a
+//     60-second reset period. The self-updater relies on this: it exits
+//     non-zero after swapping the binary and the SCM restarts it.
 func postInstall() error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -38,6 +48,22 @@ func postInstall() error {
 	if err != nil {
 		return err
 	}
+	if !strings.EqualFold(cfg.ServiceStartName, ServiceAccount) {
+		// mgr.UpdateConfig turns an empty Password into NULL ("leave
+		// unchanged"); call ChangeServiceConfig directly so the password
+		// is an explicit empty string, as a virtual account requires.
+		empty, _ := windows.UTF16PtrFromString("")
+		account, _ := windows.UTF16PtrFromString(ServiceAccount)
+		if err := windows.ChangeServiceConfig(s.Handle,
+			windows.SERVICE_NO_CHANGE, windows.SERVICE_NO_CHANGE, windows.SERVICE_NO_CHANGE,
+			nil, nil, nil, nil, account, empty, nil); err != nil {
+			return fmt.Errorf("set logon account %s: %w", ServiceAccount, err)
+		}
+		if cfg, err = s.Config(); err != nil {
+			return err
+		}
+	}
+	cfg.SidType = windows.SERVICE_SID_TYPE_UNRESTRICTED
 	cfg.DelayedAutoStart = true
 	if err := s.UpdateConfig(cfg); err != nil {
 		return err

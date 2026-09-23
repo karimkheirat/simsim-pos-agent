@@ -28,6 +28,7 @@ import (
 	"github.com/karimkheirat/simsim-pos-agent/internal/scale"
 	"github.com/karimkheirat/simsim-pos-agent/internal/scalesync"
 	svcpkg "github.com/karimkheirat/simsim-pos-agent/internal/service"
+	"github.com/karimkheirat/simsim-pos-agent/internal/updater"
 )
 
 // Version is the build-injected version string. The "dev" default
@@ -180,11 +181,15 @@ func runCmd(args []string) {
 	}
 	defer mutex.Release()
 
-	rt, err := buildRuntime(cfg, logger)
+	rt, err := buildRuntime(cfg, logger, nil)
 	if err != nil {
 		logger.Error("runtime init failed", "err", err.Error())
 		os.Exit(1)
 	}
+	// Self-update runs only under the service manager: the swap relies on
+	// the SCM recovery action to restart the process on the new binary,
+	// which a foreground run does not have.
+	logger.Info("auto-update is off in foreground run (service mode only)")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -230,6 +235,21 @@ func runCmd(args []string) {
 // (SCM doesn't capture stdout), wires secrets, hands lifecycle to
 // kardianos via svc.Run() which blocks until SCM stops the service.
 func runAsService() {
+	// Self-update rollback check FIRST — before config, printers or the
+	// network — so a new build that fails anywhere later in startup is
+	// still counted and, on its 4th start, rolled back (spec §9.2). The
+	// log file path does not depend on config, so it opens here.
+	logFile := openServiceLog(config.DefaultLogPath())
+	updatePaths, pathsErr := selfUpdatePaths()
+	if pathsErr == nil {
+		early := slog.New(slog.NewJSONHandler(logFile, nil))
+		if res := updater.Startup(updater.OSFS{}, updatePaths, Version, time.Now, early); res.RolledBack {
+			// Exit non-zero: the SCM recovery action restarts the service,
+			// which now starts the restored agent.exe.
+			os.Exit(1)
+		}
+	}
+
 	cfg, loadErr := loadAndOverride(config.DefaultConfigPath(), "", 0, "", 0)
 	if loadErr != nil && !errors.Is(loadErr, config.ErrConfigMissing) {
 		// No place to log this except the system event log via kardianos
@@ -240,7 +260,6 @@ func runAsService() {
 		os.Exit(1)
 	}
 
-	logFile := openServiceLog(config.DefaultLogPath())
 	logger := slog.New(slog.NewJSONHandler(logFile, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.LogLevel),
 	}))
@@ -269,7 +288,17 @@ func runAsService() {
 	}
 	defer mutex.Release()
 
-	rt, err := buildRuntime(cfg, logger)
+	// upd is assigned below, after the server exists; /status reads it
+	// through this closure (nil-safe until then).
+	var upd *updater.Updater
+	updateStatus := func() any {
+		if upd == nil {
+			return nil
+		}
+		return upd.Status()
+	}
+
+	rt, err := buildRuntime(cfg, logger, updateStatus)
 	if err != nil {
 		logger.Error("runtime init failed", "err", err.Error())
 		os.Exit(1)
@@ -280,6 +309,12 @@ func runAsService() {
 		Logger:    logger,
 		Heartbeat: rt.Heartbeat,
 		ScaleSync: rt.ScaleSync,
+	}
+	if pathsErr != nil {
+		logger.Error("updater: cannot locate own executable; self-update disabled", "err", pathsErr.Error())
+	} else {
+		upd = newUpdater(cfg, rt, updatePaths, prg, logger)
+		prg.Updater = upd
 	}
 	svc, err := ksvc.New(prg, svcpkg.BuildConfig())
 	if err != nil {
@@ -319,7 +354,7 @@ func serviceCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("✓ Service installed (delayed auto-start, restart on failure at 10s/30s/60s).")
+		fmt.Println("✓ Service installed/updated (runs as " + svcpkg.ServiceAccount + ", delayed auto-start, restart on failure at 10s/30s/60s).")
 	case "uninstall":
 		if err := svcpkg.Uninstall(svc); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -380,6 +415,7 @@ func loadAndOverride(configPath, printerSpec string, port int, logLevel string, 
 // foreground and service run paths.
 type agentRuntime struct {
 	Server    *api.Server
+	Cloud     *cloud.Client   // nil if cloud_base_url is empty
 	Heartbeat *heartbeat.Loop // nil if cloud_base_url is empty
 	ScaleSync *scalesync.Loop // nil if cloud_base_url is empty
 }
@@ -391,7 +427,9 @@ type agentRuntime struct {
 // Secrets non-nil invariant: config.NewSecretStore returns a non-nil
 // store on success. The api.Config.Secrets field receives that store —
 // no nil-secrets path through this function.
-func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error) {
+//
+// updateStatus (nil in foreground run) feeds the "update" key of /status.
+func buildRuntime(cfg config.Config, logger *slog.Logger, updateStatus func() any) (*agentRuntime, error) {
 	// M13 Track B PR 1 — two-printer wiring. ReceiptPrinterName
 	// drives the ESC/POS receipt path; LabelPrinterName drives the
 	// TSPL label path (added in PR 2). Either may be empty.
@@ -449,12 +487,14 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 		// Scale sync — nil when no scale is configured; the
 		// /scale/sync-plu handler surfaces NO_SCALE_CONFIGURED.
 		Scale: scaleDev,
+		// Self-update state on /status (service mode only).
+		UpdateStatus: updateStatus,
 	}, receiptP, labelP)
 	if err != nil {
 		return nil, err
 	}
 
-	rt := &agentRuntime{Server: srv}
+	rt := &agentRuntime{Server: srv, Cloud: cloudClient}
 
 	// Heartbeat loop — skip if no cloud configured (e.g. dev/CI agent
 	// with cloud_base_url cleared in config.json). v1 heartbeat reports
@@ -487,6 +527,40 @@ func buildRuntime(cfg config.Config, logger *slog.Logger) (*agentRuntime, error)
 	}
 
 	return rt, nil
+}
+
+// selfUpdatePaths locates the running binary and the update staging dir.
+func selfUpdatePaths() (updater.Paths, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return updater.Paths{}, err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
+		exe = resolved
+	}
+	return updater.Paths{Exe: exe, UpdateDir: config.DefaultUpdateDir()}, nil
+}
+
+// newUpdater builds the self-update loop for service mode. It is always
+// constructed — even with auto_update off, no cloud, or a "dev" build —
+// because its Run also performs the post-update cleanup (delete
+// agent.exe.old once the service has been healthy for 60 s).
+func newUpdater(cfg config.Config, rt *agentRuntime, paths updater.Paths, prg *svcpkg.Program, logger *slog.Logger) *updater.Updater {
+	u := &updater.Updater{
+		Version:       cfg.Version,
+		Enabled:       cfg.AutoUpdate && rt.Cloud != nil,
+		Paths:         paths,
+		Logger:        logger,
+		Ready:         rt.Server.Ready(),
+		Activity:      rt.Server.LastHardwareActivity,
+		Shutdown:      prg.ShutdownForRestart,
+		Exit:          os.Exit,
+		CheckInterval: time.Duration(cfg.ReleaseCheckSeconds) * time.Second,
+	}
+	if rt.Cloud != nil {
+		u.Releases = rt.Cloud
+	}
+	return u
 }
 
 // cloudReporterAdapter wraps a *cloud.Client into the narrow
