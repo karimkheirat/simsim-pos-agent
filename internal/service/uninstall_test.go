@@ -25,7 +25,12 @@ type fakeService struct {
 func (f *fakeService) Run() error                   { return nil }
 func (f *fakeService) Start() error                 { return nil }
 func (f *fakeService) Restart() error               { return nil }
-func (f *fakeService) Install() error               { return nil }
+func (f *fakeService) Install() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.callOrder = append(f.callOrder, "install")
+	return nil
+}
 func (f *fakeService) String() string               { return "fake" }
 func (f *fakeService) Platform() string             { return "fake-platform" }
 func (f *fakeService) Status() (ksvc.Status, error) { return ksvc.StatusUnknown, nil }

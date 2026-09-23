@@ -82,6 +82,10 @@ type statusResponse struct {
 	TerminalID  string        `json:"terminal_id"`
 	Printer     printerHealth `json:"printer"`
 	LastPrintAt *time.Time    `json:"last_print_at"`
+	// Update is the self-updater's state (internal/updater.Status):
+	// auto-update on/off, pending version, last error, last rollback.
+	// Omitted when no updater is wired (foreground `run`, tests).
+	Update any `json:"update,omitempty"`
 }
 
 // handleStatus is the authenticated diagnostic endpoint. requireTerminalToken
@@ -110,7 +114,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		TerminalID:  secrets.TerminalID,
 		Printer:     s.receiptPrinterHealth(),
 		LastPrintAt: lastPrintAt,
+		Update:      s.updateStatus(),
 	})
+}
+
+// updateStatus returns the updater's status for /status, or nil when no
+// updater is wired.
+func (s *Server) updateStatus() any {
+	if s.cfg.UpdateStatus == nil {
+		return nil
+	}
+	return s.cfg.UpdateStatus()
 }
 
 // receiptPrinterHealth reports the receipt (ESC/POS) printer's status.

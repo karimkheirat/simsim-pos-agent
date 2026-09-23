@@ -129,6 +129,7 @@ simsim-pos-agent/
 - Startup: Automatic (Delayed Start) — avoids competing with boot-critical services.
 - Recovery: restart on first, second, and subsequent failures (10s, 30s, 60s).
 - Service account: `LocalService`. The print spooler does not require user-level credentials for raw print jobs to a shared local printer. If access fails on a given machine, fall back to running under the cashier's user account — document in installer.
+  - *Superseded 2026-09-23:* the service runs as the virtual account `NT SERVICE\SimsimPOSAgent` — see §9.5.
 - Single instance only (named mutex `Global\SimsimPOSAgent`).
 
 ### 5.2 Config & state
@@ -144,7 +145,8 @@ Two stores:
   "printer_name": "SP-331",
   "log_level": "info",
   "heartbeat_seconds": 300,
-  "release_check_seconds": 86400
+  "release_check_seconds": 86400,
+  "auto_update": true
 }
 ```
 
@@ -408,6 +410,47 @@ Hosted under `https://<cloud>/api/pos-agent/release/<version>/<artifact>`. Signe
 
 ### 9.4 No code signing for pilot
 First releases will be unsigned. Inno Setup installer will trigger Windows SmartScreen warning ("Unrecognized app"). Operator clicks "More info → Run anyway". Document this in the install instructions. Acquire EV cert before broader rollout (separate workstream — flagged in pre-launch ops).
+
+### 9.5 Built 2026-09-23 — what shipped, and where it differs from the plan above
+
+Code: `internal/updater` (loop, download, swap, rollback, cleanup), wired from `cmd/agent/main.go` `runAsService`. The plan above is kept as written; this section is authoritative where they differ.
+
+**Contract (cloud side).** `GET {cloud_base_url}/api/pos-agent/release/latest`, no auth → `{ ok:true, data:{ version, download_url, published_at, agent_download_url, agent_sha256 } }`. `download_url` is the installer (for humans). The updater acts only on `agent_download_url` + `agent_sha256`; if either is `null` (a release without the bare exe asset) it does nothing. There is no `mandatory` flag — every update waits for the window. No signed/HMAC URLs: the asset is public and integrity comes from the SHA-256.
+
+**Release assets (§9.1, as built in `.github/workflows/release.yml`).** Alongside the installer (`simsim-pos-agent-setup-<version>.exe` — the real name, not `-installer_`), each tagged release uploads `simsim-pos-agent_<version>_windows_amd64.exe` (a copy of `build/agent.exe`) and `simsim-pos-agent_<version>_windows_amd64.exe.sha256`. **The `.sha256` file is exactly 64 lowercase hex characters: no filename, no trailing newline, no BOM** (written with `printf '%s'`; the step fails if the value is not `^[0-9a-f]{64}$`). The agent compares case-insensitively anyway.
+
+**Config.** `release_check_seconds` (default 86400) and `auto_update` (default `true`) in `config.json`. `auto_update:false`, a `"dev"` build, or an empty `cloud_base_url` turns the check/install loop off; post-update cleanup still runs.
+
+**Cadence.** Service mode only (a foreground `agent run` logs that auto-update is off — the swap depends on the SCM restarting the process). First check ~5 min after start, then every `release_check_seconds`. Version compare is numeric per segment (`0.3.10` > `0.3.9`); anything unparseable (`dev`, `0.0.0-manual`) is never acted on. A version this machine already rolled back (§ below) is skipped; a newer one is not.
+
+**Conditions (§9.3, as built).** A strictly newer release becomes *pending*. It installs only when all hold: local time in [03:00, 05:00); no `/print`, `/print-label`, `/test-print` or `/drawer/open` request in flight or finished in the last 60 s (the api server stamps a timestamp on entry and exit of those four handlers); ≥ 200 MB free on the volume holding `agent.exe`. Otherwise it re-checks every 10 min, without re-asking the cloud, until the conditions hold. The "telemetry being flushed" condition is dropped — there is no outbox yet.
+
+**Download.** HTTPS only (a non-https URL is refused, and so is a redirect to one), 100 MB cap, 10 min timeout, to `%ProgramData%\Simsim\POSAgent\update\new.exe`. SHA-256 mismatch → file deleted, logged, retried in 10 min; after 3 consecutive failures it backs off to the daily cadence.
+
+**Swap (§9.2 step 4, as built).** `new.exe` lives on ProgramData and `agent.exe` in Program Files — possibly different volumes — so the order is:
+1. copy `update\new.exe` → `{app}\bin\agent.exe.new`;
+2. write `update\pending.json` `{from, to, attempts:0, at}`;
+3. rename `agent.exe` → `agent.exe.old` (renaming a running exe is allowed on Windows; deleting it is not);
+4. rename `agent.exe.new` → `agent.exe`.
+If 3 or 4 fails, what was done is undone and the marker deleted. On success the HTTP server is shut down gracefully (in-flight requests finish) and the process exits with code 1. It does NOT ask kardianos to restart: the SCM recovery action set at install (restart after 10 s / 30 s / 60 s) sees an unexpected exit and starts the service again, now on the new binary.
+
+**Rollback (§9.2 step 5, as built).** The very first thing the service process does — before config, printers or the network, so a build that dies anywhere later in startup is still caught — is read `pending.json`. If it names the running version, `attempts` is incremented. On the 4th start (`attempts > 3`) with `agent.exe.old` present: `agent.exe` → `agent.exe.bad`, `agent.exe.old` → `agent.exe`, write `update\last-rollback.json` `{from:<bad>, to:<restored>, attempts, at, reason}`, delete the marker, exit 1 — the SCM restarts the old version. A marker naming a different version than the one running (the swap never took, or the installer replaced the binary since) is stale and deleted. Once the server has been listening for 60 s, the update is accepted: `agent.exe.old`, `agent.exe.bad`, the marker and staging files are deleted. `last-rollback.json` is kept.
+
+**Visibility.** The local `GET /status` carries an `update` object: `auto_update`, `current_version`, `pending_version`, `last_check_at`, `last_error`, `last_rollback`. Nothing new is sent to the cloud — the heartbeat's `agent_version` already shows which build each terminal runs.
+
+**Service identity and installer changes this required.** The self-updater has to rename files in `{app}\bin`, which under Program Files is read-only to low-privilege accounts. Instead of granting that to the shared `NT AUTHORITY\LocalService` SID (every LocalService service on the PC would inherit the right) or running as `LocalSystem` (full machine control for a printer driver), the service now runs as its own **virtual service account `NT SERVICE\SimsimPOSAgent`**: a per-service SID the SCM manages, with no password, no rights shared with any other service, and not SYSTEM. Only this one service gets write access to its own files. Concretely:
+- `service install` registers the service under that account (kardianos `UserName`, empty password). It is now **idempotent**: on an existing service it skips the create and still runs `postInstall`, which sets the logon account (explicit empty password), service SID type *unrestricted*, delayed auto-start and the 10 s / 30 s / 60 s restart recovery actions. Every install, fresh or upgrade, ends in the same configuration.
+- The installer creates `%ProgramData%\Simsim\POSAgent` (+ `logs`, `update`) and `%ProgramData%\Simsim\balance`, and — AFTER `service install`, because the account name only resolves once the service exists — grants `NT SERVICE\SimsimPOSAgent` *Modify* (`(OI)(CI)M`) on `{app}\bin`, `%ProgramData%\Simsim\POSAgent` (config.json, secrets.dat, logs, update staging) and `%ProgramData%\Simsim\balance` (scale PLU file). Inheritance also covers files the old LocalService identity created.
+- Nothing else changes for the service: `secrets.dat` is DPAPI **machine** scope (`CRYPTPROTECT_LOCAL_MACHINE`), so it decrypts under any identity and needs no migration; the loopback listener on 47291 needs no privilege; raw printing through the local spooler works for virtual accounts (printers grant *Print* to Everyone by default).
+- The uninstaller removes `agent.exe.old/.bad/.new`.
+
+**How an existing shop moves to the new account:** it runs the new installer once (no uninstall first). (1) `PrepareToInstall` stops the running service with the already-installed `agent.exe service stop`, which also frees the exe for copying; (2) files are copied; (3) `write-config` preserves config.json; (4) `service install` finds the existing service, skips the create, and `postInstall` switches its logon account from LocalService to `NT SERVICE\SimsimPOSAgent`; (5) the icacls grants run; (6) `service start` starts it under the new account on the new binary. Pairing survives (same secrets.dat). Until a shop does this it keeps running as LocalService on the old binary and cannot self-update — self-update cannot bootstrap itself onto an install that never had it.
+
+**Residual trade, accepted.** The installer and uninstaller run `agent.exe` / `agentctl.exe` from `{app}\bin` as admin, and this one account can now write there, so a compromise of the agent process could plant a binary that a later install or uninstall runs elevated. That is the same position as every self-updating service without code signing; signing the binaries (and verifying the signature before a swap) is the recorded fix — see §9.4.
+
+**Not verifiable on a dev machine, only on a real install:** that the SCM recovery action actually restarts the service after the exit-1, that the virtual account can perform the renames under the granted ACL, that `postInstall` really switches an existing LocalService install (and the upgrade sequence above end to end), printing under the virtual account on a real shop printer, and the rollback path end to end across real restarts. Unit tests cover everything short of the SCM (semver, window, conditions, HTTPS refusal, size cap, SHA mismatch, swap order, failed-swap undo, rollback on the 4th start, stale marker, cleanup after healthy).
+
+**Known limits.** A build that crashes before `runAsService` reaches the marker check (e.g. a panic in package init) is never rolled back — the installer is the recovery path. `config.json` is decoded with unknown fields disallowed, so a rollback target older than a config key written by a newer installer would refuse to start; the updater itself never rewrites `config.json`.
 
 ---
 

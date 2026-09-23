@@ -83,13 +83,16 @@ func TestVerify_RejectsTamperedSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	// Flip the last character of the signature segment.
+	// Flip a MIDDLE character of the signature segment. The last base64
+	// character carries padding bits the decoder ignores, so flipping it
+	// sometimes decodes to the same signature and the test flaked.
 	parts := strings.Split(token, ".")
 	sig := []byte(parts[2])
-	if sig[len(sig)-1] == 'A' {
-		sig[len(sig)-1] = 'B'
+	mid := len(sig) / 2
+	if sig[mid] == 'A' {
+		sig[mid] = 'B'
 	} else {
-		sig[len(sig)-1] = 'A'
+		sig[mid] = 'A'
 	}
 	tampered := parts[0] + "." + parts[1] + "." + string(sig)
 

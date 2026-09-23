@@ -12,8 +12,12 @@ import (
 )
 
 // DPAPISecretStore persists secrets encrypted via the Windows Data
-// Protection API (DPAPI) with CRYPTPROTECT_LOCAL_MACHINE so the agent's
-// LocalService account can decrypt without per-user keys. Anyone with
+// Protection API (DPAPI) with CRYPTPROTECT_LOCAL_MACHINE: the key is the
+// machine's, not any account's, so whichever identity the service runs
+// as can decrypt what `agentctl pair` (run as admin) encrypted. This is
+// why moving the service from LocalService to the virtual account
+// NT SERVICE\SimsimPOSAgent (2026-09-23) needed no secrets migration —
+// only file access, which the installer grants. Anyone with
 // administrator privileges on the machine can decrypt — accepted trade-off
 // per POS_AGENT_SPEC.md §5.2 and the M2 contract reasoning.
 type DPAPISecretStore struct {

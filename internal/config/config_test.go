@@ -47,6 +47,12 @@ func TestDefaults(t *testing.T) {
 	if c.ScaleSyncSeconds != 60 {
 		t.Errorf("ScaleSyncSeconds = %d, want 60", c.ScaleSyncSeconds)
 	}
+	if c.ReleaseCheckSeconds != 86400 {
+		t.Errorf("ReleaseCheckSeconds = %d, want 86400", c.ReleaseCheckSeconds)
+	}
+	if !c.AutoUpdate {
+		t.Errorf("AutoUpdate = false, want true by default")
+	}
 }
 
 func TestValidate_ReceiptPrinterLanguage(t *testing.T) {
@@ -227,6 +233,7 @@ func TestValidate_InvalidFields(t *testing.T) {
 		{"heartbeat_seconds negative", func(c *Config) { c.HeartbeatSeconds = -5 }, "heartbeat_seconds"},
 		{"scale_sync_seconds zero", func(c *Config) { c.ScaleSyncSeconds = 0 }, "scale_sync_seconds"},
 		{"scale_sync_seconds negative", func(c *Config) { c.ScaleSyncSeconds = -5 }, "scale_sync_seconds"},
+		{"release_check_seconds zero", func(c *Config) { c.ReleaseCheckSeconds = 0 }, "release_check_seconds"},
 		// M13 A.5a — only 58 and 80 are valid; everything else rejected.
 		{"paper_width_mm zero", func(c *Config) { c.PaperWidthMM = 0 }, "paper_width_mm"},
 		{"paper_width_mm 76 (non-spec)", func(c *Config) { c.PaperWidthMM = 76 }, "paper_width_mm"},

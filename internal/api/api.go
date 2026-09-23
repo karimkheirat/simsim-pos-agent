@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/config"
@@ -92,6 +93,14 @@ type Config struct {
 	// /scale/sync-plu returns 503 NO_SCALE_CONFIGURED; production main
 	// wires this from scale_ip/scale_port via newScaleOrNil.
 	Scale scale.Scale
+
+	// UpdateStatus, when set, is called by GET /status and its result is
+	// surfaced under the "update" key (omitted when nil or when the func
+	// returns nil). Production main wires internal/updater's Status —
+	// auto-update on/off, the pending version, the last error and the
+	// last rollback note. Typed as `any` so api stays decoupled from the
+	// updater package.
+	UpdateStatus func() any
 }
 
 // CloudReporter is the narrow interface the M13 /report-verified
@@ -121,6 +130,12 @@ type Server struct {
 	cloud          CloudReporter
 	scale          scale.Scale
 	handler        http.Handler
+
+	// activity + ready feed the self-updater: the last hardware job
+	// (print/label/test-print/drawer) and "listener is bound".
+	activity  activityTracker
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 // New builds a Server with all middleware wired and routes registered.
@@ -194,6 +209,7 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 		idem:           NewIdempotencyStore(cfg.IdempotencyTTL),
 		cloud:          cfg.CloudReporter,
 		scale:          cfg.Scale,
+		ready:          make(chan struct{}),
 	}
 
 	mux := http.NewServeMux()
@@ -209,12 +225,15 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// requireAuth, which accepts EITHER the new JWT (Authorization:
 	// Bearer) OR the legacy X-Terminal-Token. The legacy header keeps
 	// working until A.3 removes it (once the web client has cut over).
-	mux.HandleFunc("POST /print", s.requireAuth(s.handlePrint))
-	mux.HandleFunc("POST /test-print", s.requireAuth(s.handleTestPrint))
+	//
+	// Every route that drives hardware is wrapped in s.activity.wrap so
+	// the self-updater can see "a job ran in the last 60 s" (§9.3).
+	mux.HandleFunc("POST /print", s.requireAuth(s.activity.wrap(s.handlePrint)))
+	mux.HandleFunc("POST /test-print", s.requireAuth(s.activity.wrap(s.handleTestPrint)))
 	// M13 Track B PR 2 — /print-label is the TSPL counterpart to /print.
 	// Same JWT gate (requireAuth); routes to s.labelPrinter; surfaces
 	// 503 NO_LABEL_PRINTER_CONFIGURED when no label printer is wired.
-	mux.HandleFunc("POST /print-label", s.requireAuth(s.handlePrintLabel))
+	mux.HandleFunc("POST /print-label", s.requireAuth(s.activity.wrap(s.handlePrintLabel)))
 	// M13 print-verification — /report-verified is the loopback bridge
 	// for operator-confirmed test-print outcomes. JWT-authed. Loads the
 	// agent's stored terminal token from secrets and forwards to the
@@ -237,7 +256,7 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// and a no-sale opening) — and it holds the handshake JWT, not the
 	// terminal token. requireAuth still accepts the legacy X-Terminal-Token,
 	// so older web clients keep working. /status stays on the legacy gate.
-	mux.HandleFunc("POST /drawer/open", s.requireAuth(s.handleDrawerOpen))
+	mux.HandleFunc("POST /drawer/open", s.requireAuth(s.activity.wrap(s.handleDrawerOpen)))
 	mux.HandleFunc("GET /status", s.requireTerminalToken(s.handleStatus))
 
 	// Outer → inner: recover, requestLog, checkLoopback, cors, mux.
@@ -275,6 +294,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	s.logger.Info("api: listening", "addr", listener.Addr().String())
+	s.readyOnce.Do(func() { close(s.ready) })
 
 	select {
 	case <-ctx.Done():
