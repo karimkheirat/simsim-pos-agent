@@ -625,6 +625,29 @@ func TestDrawerOpen_Success(t *testing.T) {
 	}
 }
 
+// The web till kicks the drawer with the handshake JWT (2026-09-23), the
+// same token /print takes; the legacy X-Terminal-Token keeps working above.
+func TestDrawerOpen_AcceptsHandshakeJWT(t *testing.T) {
+	fp := &fakePrinter{name: "SP-331", reachable: true}
+	_, ts := newTestServer(t, fp)
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/drawer/open", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+mintTestJWT(t, nil))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if jobs := fp.Printed(); len(jobs) != 1 || !bytes.Equal(jobs[0].data, escpos.DrawerKick()) {
+		t.Fatalf("want one drawer kick, got %d jobs", len(jobs))
+	}
+}
+
 func TestDrawerOpen_PrinterError(t *testing.T) {
 	fp := &fakePrinter{name: "SP-331", reachable: true, printErr: errors.New("drawer fault")}
 	_, ts := newTestServer(t, fp)
