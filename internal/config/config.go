@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Config is the on-disk JSON shape stored at %ProgramData%\Simsim\POSAgent\config.json
@@ -148,12 +149,66 @@ var (
 	ErrConfigMalformed = errors.New("config: malformed JSON")
 )
 
+// DefaultCloudBaseURL is where every agent talks to the cloud since the
+// product became Molshi (9 Nov 2026).
+const DefaultCloudBaseURL = "https://app.molshi.com"
+
+// DefaultAllowedOrigins are the web addresses that may drive the agent.
+// app.molshi.com is production, staging.molshi.com is staging. The two
+// older production addresses still serve the same app and stay allowed
+// so a till open on them keeps printing until they are retired.
+var DefaultAllowedOrigins = []string{
+	"https://app.molshi.com",
+	"https://staging.molshi.com",
+	"https://opensimsim.co",
+	"https://web-production-6bb4d.up.railway.app",
+}
+
+// retiredCloudBaseURLs are cloud addresses earlier releases wrote into
+// config.json. They still reach production today, but are moved to
+// DefaultCloudBaseURL on upgrade so a shop does not depend on them.
+// Any other value (staging, a dev box) is the operator's and is kept.
+var retiredCloudBaseURLs = map[string]bool{
+	"https://opensimsim.co":                        true,
+	"https://opensimsim.co/":                       true,
+	"https://web-production-6bb4d.up.railway.app":  true,
+	"https://web-production-6bb4d.up.railway.app/": true,
+}
+
+// Upgrade brings a config written by an earlier release up to date
+// without undoing anything the operator set:
+//   - every default allowed origin missing from the list is ADDED (the
+//     existing entries, including hand-added ones, are kept in order);
+//   - a cloud_base_url that names a retired address moves to
+//     DefaultCloudBaseURL.
+//
+// It returns what changed, in words, for the log; nil means nothing did.
+func Upgrade(c *Config) []string {
+	var changes []string
+	have := make(map[string]bool, len(c.AllowedOrigins))
+	for _, o := range c.AllowedOrigins {
+		have[strings.TrimRight(o, "/")] = true
+	}
+	for _, o := range DefaultAllowedOrigins {
+		if !have[o] {
+			c.AllowedOrigins = append(c.AllowedOrigins, o)
+			have[o] = true
+			changes = append(changes, "allowed_origins += "+o)
+		}
+	}
+	if retiredCloudBaseURLs[c.CloudBaseURL] {
+		changes = append(changes, "cloud_base_url "+c.CloudBaseURL+" -> "+DefaultCloudBaseURL)
+		c.CloudBaseURL = DefaultCloudBaseURL
+	}
+	return changes
+}
+
 // Defaults returns the M1 defaults from the spec.
 func Defaults() Config {
 	return Config{
 		Version:          "0.1.0", // informational only; build-time Version constant in main() overrides
 		ListenPort:       47291,
-		CloudBaseURL:     "https://opensimsim.co",
+		CloudBaseURL:     DefaultCloudBaseURL,
 		HeartbeatSeconds: 300,
 		PrinterName:      "",
 		// M13 Track B PR 1 — new two-printer fields default empty;
@@ -164,10 +219,7 @@ func Defaults() Config {
 		LabelPrinterName:   "",
 		TSPLDialect:        "standard",
 		LogLevel:           "info",
-		AllowedOrigins: []string{
-			"https://web-production-6bb4d.up.railway.app",
-			"https://opensimsim.co",
-		},
+		AllowedOrigins:     append([]string(nil), DefaultAllowedOrigins...),
 		// M13 A.5a — 80mm is the Algeria-realistic default. The vast
 		// majority of pilot-targeted printers ship as 80mm; 58mm is
 		// for smaller-format retail (newsstand, deli labels) which
@@ -374,4 +426,36 @@ func programDataDir() string {
 		return v
 	}
 	return `C:\ProgramData`
+}
+
+// UpgradeFile applies Upgrade to the config.json at path and writes it
+// back when anything changed, stamping version. A missing file is left
+// missing (Defaults are already current). Used at agent start, so an
+// agent replaced by the self-updater brings its own config up to date.
+func UpgradeFile(path, version string) ([]string, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		if errors.Is(err, ErrConfigMissing) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	changes := Upgrade(&cfg)
+	if len(changes) == 0 {
+		return nil, nil
+	}
+	if version != "" {
+		cfg.Version = version
+	}
+	if err := Validate(cfg); err != nil {
+		return changes, err
+	}
+	raw, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return changes, err
+	}
+	if err := WriteAtomic(path, raw, 0o644); err != nil {
+		return changes, err
+	}
+	return changes, nil
 }

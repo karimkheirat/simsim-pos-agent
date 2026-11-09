@@ -103,6 +103,13 @@ type Config struct {
 	UpdateStatus func() any
 }
 
+// ErrTerminalTokenRefused is what a CloudReporter returns (wrapped) when
+// the cloud refuses the agent's terminal token: it was revoked, or the
+// agent was paired to a shop or an environment the cloud no longer
+// knows (found 9 Nov 2026 at the first pilot shop, which had signed up
+// afresh on production while its PC still held an older pairing).
+var ErrTerminalTokenRefused = errors.New("cloud refused the terminal token")
+
 // CloudReporter is the narrow interface the M13 /report-verified
 // handler depends on. Defined in this package (not internal/cloud)
 // so api stays decoupled from the cloud client; production wiring

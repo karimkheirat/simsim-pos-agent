@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -240,6 +241,37 @@ func TestReportVerified_CloudError_502(t *testing.T) {
 	// retry option, devs see the cloud failure shape).
 	if !strings.Contains(msg, "connection refused") {
 		t.Errorf("message = %q, want substring 'connection refused'", msg)
+	}
+}
+
+// ── Cloud refuses the token → pairing forgotten, 503 NOT_PAIRED ────
+
+func TestReportVerified_TokenRefused_ClearsAndAnswersNotPaired(t *testing.T) {
+	rep := &fakeCloudReporter{returnErr: fmt.Errorf("%w: 401", ErrTerminalTokenRefused)}
+	sec := pairedSecrets()
+	_, ts := newTestServerWith(t, nil, Config{
+		ListenAddr:               "127.0.0.1:0",
+		AllowedOrigins:           []string{"https://allowed.example"},
+		Version:                  "test-1.0.0",
+		Logger:                   discardLogger(),
+		Secrets:                  sec,
+		IdempotencyTTL:           time.Hour,
+		IdempotencySweepInterval: time.Hour,
+		CloudReporter:            rep,
+	})
+	token := mintTestJWT(t, nil)
+
+	resp := jwtPostJSON(t, ts, "/report-verified", token, []byte(`{"verified": true}`))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.StatusCode)
+	}
+	_, _, code, _ := decodeEnvelope(t, resp.Body)
+	if code != CodeNotPaired {
+		t.Errorf("code = %q, want %q", code, CodeNotPaired)
+	}
+	if _, err := sec.Load(); err == nil {
+		t.Error("secrets still present after the cloud refused the token")
 	}
 }
 

@@ -28,8 +28,8 @@ AppName=Simsim POS Agent
 AppVersion={#AppVersion}
 AppVerName=Simsim POS Agent {#AppVersion}
 AppPublisher=Simsim
-AppPublisherURL=https://opensimsim.co
-AppSupportURL=https://opensimsim.co
+AppPublisherURL=https://app.molshi.com
+AppSupportURL=https://app.molshi.com
 DefaultDirName={commonpf}\Simsim\POSAgent
 DefaultGroupName=Simsim POS Agent
 DisableProgramGroupPage=no
@@ -222,12 +222,12 @@ begin
   Result := SelectedPrinterName;
 end;
 
-// GetCloudBaseURLArg returns the production cloud base URL. Hardcoded
-// here for now; matches config.Defaults().CloudBaseURL in Go-land.
+// GetCloudBaseURLArg returns the production cloud base URL (Molshi since
+// 9 Nov 2026). Hardcoded here; matches config.DefaultCloudBaseURL in Go.
 // If the URL ever moves to a #define, swap this for {#CloudBaseURL}.
 function GetCloudBaseURLArg(Param: String): String;
 begin
-  Result := 'https://opensimsim.co';
+  Result := 'https://app.molshi.com';
 end;
 
 // --- Wizard lifecycle ---

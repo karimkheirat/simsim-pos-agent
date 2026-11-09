@@ -61,6 +61,26 @@ begin
   Result := SelectedPrinterDriverName;
 end;
 
+// isVirtualPrinter returns True for printers that are not a device on
+// the counter: remote-desktop and PDF/XPS writers, OneNote, fax. Found at
+// the first pilot shop (9 Nov 2026), where the picker offered "AnyDesk
+// Printer" and OneNote beside the real Xprinter. Case-insensitive name
+// match; a real printer named like one of these is not expected.
+function isVirtualPrinter(Name: String): Boolean;
+var
+  L: String;
+begin
+  L := LowerCase(Name);
+  Result := (Pos('anydesk', L) > 0) or
+            (Pos('teamviewer', L) > 0) or
+            (Pos('onenote', L) > 0) or
+            (Pos('fax', L) > 0) or
+            (Pos('microsoft print to pdf', L) > 0) or
+            (Pos('microsoft xps', L) > 0) or
+            (Pos('xps document writer', L) > 0) or
+            (Pos('pdf', L) > 0);
+end;
+
 // detectPrinters runs the PowerShell enumeration. Returns the list of
 // printer names. Sets DetectionFailed=True if the enumeration itself
 // could not be run (Exec returned False) or PowerShell exited non-zero.
@@ -105,13 +125,14 @@ begin
     Exit;
   end;
 
-  // Filter blank lines (PowerShell sometimes emits trailing whitespace).
+  // Filter blank lines (PowerShell sometimes emits trailing whitespace)
+  // and virtual printers (isVirtualPrinter): only real devices are offered.
   SetArrayLength(Cleaned, GetArrayLength(RawLines));
   count := 0;
   for i := 0 to GetArrayLength(RawLines) - 1 do
   begin
     L := Trim(RawLines[i]);
-    if L <> '' then
+    if (L <> '') and not isVirtualPrinter(L) then
     begin
       Cleaned[count] := L;
       count := count + 1;
