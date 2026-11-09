@@ -609,14 +609,10 @@ type cloudReporterShim struct {
 func (s *cloudReporterShim) ReportPrintVerified(
 	ctx context.Context, token string, verified bool, errorClass string,
 ) error {
-	err := s.client.ReportPrintVerified(ctx, token, cloud.PrintVerifiedRequest{
+	return s.client.ReportPrintVerified(ctx, token, cloud.PrintVerifiedRequest{
 		Verified:   verified,
 		ErrorClass: errorClass,
 	})
-	if errors.Is(err, cloud.ErrUnauthenticated) {
-		return fmt.Errorf("%w: %w", api.ErrTerminalTokenRefused, err)
-	}
-	return err
 }
 
 // newPrinterOrNil constructs a printer.Printer from the given spec or

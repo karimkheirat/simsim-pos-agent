@@ -3,9 +3,11 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -262,8 +264,18 @@ func Load(path string) (Config, error) {
 	}
 	defer f.Close()
 
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return Defaults(), fmt.Errorf("config: read %s: %w", path, err)
+	}
+	// A config.json edited by hand in Notepad may be saved "UTF-8 with
+	// BOM"; the JSON decoder refuses the BOM and the service would not
+	// start. Hand edits are part of support (first pilot shop, 9 Nov
+	// 2026), so the BOM is skipped.
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+
 	cfg := Defaults()
-	dec := json.NewDecoder(f)
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
 		return Defaults(), fmt.Errorf("%w: %s: %v", ErrConfigMalformed, path, err)

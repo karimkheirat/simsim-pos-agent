@@ -91,20 +91,6 @@ func (s *Server) handleReportVerified(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if err := s.cloud.ReportPrintVerified(ctx, secrets.TerminalToken, req.Verified, req.ErrorClass); err != nil {
-		if errors.Is(err, ErrTerminalTokenRefused) {
-			// The pairing is dead: answering CLOUD_UNREACHABLE would make
-			// the web ask the operator to retry forever. Forget the
-			// pairing (the heartbeat does the same on its next 401) and
-			// answer NOT_PAIRED, which the web turns into "pair again".
-			s.logger.Error("report-verified: cloud refused the terminal token — clearing local secrets, agent now unpaired",
-				"terminal_id", secrets.TerminalID)
-			if cerr := s.secrets.Clear(); cerr != nil {
-				s.logger.Error("report-verified: secret clear failed", "err", cerr.Error())
-			}
-			writeError(w, http.StatusServiceUnavailable, CodeNotPaired,
-				"Molshi ne reconnaît plus cet ordinateur. Associez-le de nouveau à votre caisse.")
-			return
-		}
 		s.logger.Warn("report-verified: cloud call failed",
 			"err", err.Error(),
 			"verified", req.Verified,

@@ -85,3 +85,64 @@ func TestUpgradeFileLeavesAMissingFileMissing(t *testing.T) {
 		t.Error("a missing config was created")
 	}
 }
+
+// Rachid's PC on 9 Nov: a hand-built 0.3.12 and a config.json edited by
+// hand (app.molshi.com added to the two old origins, cloud address moved,
+// the Xprinter as receipt printer in TSPL). Saved with and without a BOM.
+func TestRachidsHandEditedConfigUpgradesCleanly(t *testing.T) {
+	const handEdited = `{
+  "version": "0.3.12",
+  "listen_port": 47291,
+  "cloud_base_url": "https://app.molshi.com",
+  "heartbeat_seconds": 300,
+  "printer_name": "Xprinter XP-420B",
+  "receipt_printer_name": "Xprinter XP-420B",
+  "label_printer_name": "",
+  "tspl_dialect": "standard",
+  "log_level": "info",
+  "allowed_origins": [
+    "https://web-production-6bb4d.up.railway.app",
+    "https://opensimsim.co",
+    "https://app.molshi.com"
+  ],
+  "paper_width_mm": 80,
+  "receipt_printer_language": "tspl",
+  "receipt_width_dots": 0,
+  "dpi": 203,
+  "scale_ip": "",
+  "scale_port": 0,
+  "scale_sync_seconds": 60,
+  "release_check_seconds": 86400,
+  "auto_update": true
+}`
+	for name, body := range map[string]string{"plain": handEdited, "bom": "\ufeff" + handEdited} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("0.3.13 cannot read the hand-edited config: %v", err)
+			}
+			changes, err := UpgradeFile(path, "0.3.13")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(changes) != 1 || changes[0] != "allowed_origins += https://staging.molshi.com" {
+				t.Errorf("changes = %v", changes)
+			}
+			got, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(got); err != nil {
+				t.Fatal(err)
+			}
+			wantOrigins := []string{"https://web-production-6bb4d.up.railway.app", "https://opensimsim.co", "https://app.molshi.com", "https://staging.molshi.com"}
+			if !reflect.DeepEqual(got.AllowedOrigins, wantOrigins) || got.CloudBaseURL != "https://app.molshi.com" ||
+				got.ReceiptPrinterName != "Xprinter XP-420B" || got.ReceiptPrinterLanguage != "tspl" || got.Version != "0.3.13" || !got.AutoUpdate {
+				t.Errorf("after upgrade: %+v", got)
+			}
+		})
+	}
+}
