@@ -23,14 +23,14 @@ func TestDefaults(t *testing.T) {
 	if c.PrinterName != "" {
 		t.Errorf("PrinterName = %q, want empty", c.PrinterName)
 	}
-	if c.CloudBaseURL != "https://opensimsim.co" {
-		t.Errorf("CloudBaseURL = %q, want opensimsim.co prod URL", c.CloudBaseURL)
+	if c.CloudBaseURL != "https://app.molshi.com" {
+		t.Errorf("CloudBaseURL = %q, want app.molshi.com prod URL", c.CloudBaseURL)
 	}
 	if c.HeartbeatSeconds != 300 {
 		t.Errorf("HeartbeatSeconds = %d, want 300", c.HeartbeatSeconds)
 	}
-	if len(c.AllowedOrigins) != 2 {
-		t.Errorf("AllowedOrigins len = %d, want 2", len(c.AllowedOrigins))
+	if len(c.AllowedOrigins) != len(DefaultAllowedOrigins) {
+		t.Errorf("AllowedOrigins len = %d, want %d", len(c.AllowedOrigins), len(DefaultAllowedOrigins))
 	}
 	if c.PaperWidthMM != 80 {
 		t.Errorf("PaperWidthMM = %d, want 80", c.PaperWidthMM)
@@ -176,8 +176,8 @@ func TestLoad_PartialOverride(t *testing.T) {
 	if cfg.Version != "0.1.0" {
 		t.Errorf("Version = %q, want 0.1.0 (default)", cfg.Version)
 	}
-	if len(cfg.AllowedOrigins) != 2 {
-		t.Errorf("AllowedOrigins len = %d, want 2 (default)", len(cfg.AllowedOrigins))
+	if len(cfg.AllowedOrigins) != len(DefaultAllowedOrigins) {
+		t.Errorf("AllowedOrigins len = %d, want %d (default)", len(cfg.AllowedOrigins), len(DefaultAllowedOrigins))
 	}
 	if cfg.PaperWidthMM != 80 {
 		t.Errorf("PaperWidthMM = %d, want 80 (default)", cfg.PaperWidthMM)

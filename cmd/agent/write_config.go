@@ -54,6 +54,11 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// Bring an older config up to date first (missing default origins
+	// added, a retired cloud address moved), keeping every value the
+	// operator set; the flags below then apply on top.
+	config.Upgrade(&cfg)
+
 	if *printerName != "" {
 		// M13 Track B PR 1 — mirror the installer's --printer flag into
 		// both the legacy and the new receipt-printer field so a fresh

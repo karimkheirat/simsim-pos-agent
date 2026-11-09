@@ -160,6 +160,7 @@ func runCmd(args []string) {
 	if errors.Is(loadErr, config.ErrConfigMissing) {
 		logger.Warn("config file missing — using defaults", "path", *configPath)
 	}
+	upgradeConfig(&cfg, *configPath, loadErr, logger)
 	logger.Info("simsim-pos-agent starting",
 		"version", cfg.Version,
 		"listen_port", cfg.ListenPort,
@@ -267,6 +268,7 @@ func runAsService() {
 	if errors.Is(loadErr, config.ErrConfigMissing) {
 		logger.Warn("config file missing — using defaults", "path", config.DefaultConfigPath())
 	}
+	upgradeConfig(&cfg, config.DefaultConfigPath(), loadErr, logger)
 	logger.Info("simsim-pos-agent starting",
 		"version", cfg.Version,
 		"listen_port", cfg.ListenPort,
@@ -382,6 +384,25 @@ func serviceCmd(args []string) {
 		fmt.Println(state)
 	default:
 		printUsage()
+	}
+}
+
+// upgradeConfig brings an older config up to date at start (the Molshi
+// addresses, 9 Nov 2026): the running config is upgraded in memory, and
+// config.json on disk is rewritten when it changed. A write that fails
+// is logged and the agent runs on the in-memory upgrade.
+func upgradeConfig(cfg *config.Config, path string, loadErr error, logger *slog.Logger) {
+	config.Upgrade(cfg)
+	if loadErr != nil {
+		return
+	}
+	changes, err := config.UpgradeFile(path, Version)
+	if err != nil {
+		logger.Warn("config upgrade not written", "path", path, "err", err.Error(), "changes", changes)
+		return
+	}
+	if len(changes) > 0 {
+		logger.Info("config upgraded", "path", path, "changes", changes)
 	}
 }
 
