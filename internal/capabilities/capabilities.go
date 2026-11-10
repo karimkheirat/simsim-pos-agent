@@ -180,16 +180,21 @@ func defaultModelCaps() PrinterCapabilities {
 
 // fallbackCaps mirrors defaultModelCaps but with Source=Fallback. The
 // chosen defaults are the most common Algeria-realistic configuration
-// (80mm, cut + drawer, CODE128 + EAN13). Conservative in the sense
-// of "matches the most common pilot store hardware"; an unknown 58mm
-// printer would silently get 80mm columns, but that's correctable via
-// the agent's PaperWidthMM config (the renderer reads the config,
-// NOT this hint).
+// (80mm, cut, CODE128 + EAN13). Conservative in the sense of "matches
+// the most common pilot store hardware"; an unknown 58mm printer would
+// silently get 80mm columns, but that's correctable via the agent's
+// PaperWidthMM config (the renderer reads the config, NOT this hint).
+//
+// NO DRAWER for an unknown printer (ISSUE-110, onboarding inventory §5, 10):
+// a cash drawer is a fact about the counter, not a property a printer's
+// name implies, and claiming one sends a kick to a printer with nothing on
+// its DK port. The shop turns it on in Molshi (Stations › Configurer ›
+// Tiroir-caisse), which is an override the web reads over this value.
 func fallbackCaps() PrinterCapabilities {
 	return PrinterCapabilities{
 		PaperWidthMM:    80,
 		CutSupported:    true,
-		DrawerSupported: true,
+		DrawerSupported: false,
 		BarcodeTypes:    append([]string(nil), defaultBarcodes...),
 		Codepages:       append([]string(nil), defaultCodepages...),
 		QRSupported:     false,

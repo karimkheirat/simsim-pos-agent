@@ -156,8 +156,8 @@ func TestLookup_UnknownModelFallback(t *testing.T) {
 			if !got.CutSupported {
 				t.Errorf("CutSupported = false, want true")
 			}
-			if !got.DrawerSupported {
-				t.Errorf("DrawerSupported = false, want true")
+			if got.DrawerSupported {
+				t.Errorf("DrawerSupported = true, want false (an unknown printer claims no drawer, ISSUE-110)")
 			}
 		})
 	}
