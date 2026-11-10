@@ -87,6 +87,16 @@ type Config struct {
 	// main wires this from a cloud.Client shim.
 	CloudReporter CloudReporter
 
+	// ListPrinters returns the printers Windows knows (virtual ones dropped)
+	// for the web app's first setup (simsim États G 14). Nil → GET /printers
+	// answers 503 PRINTER_LIST_UNAVAILABLE.
+	ListPrinters func() ([]printer.Installed, error)
+
+	// ChooseReceiptPrinter records the receipt printer the shop picked in the
+	// web app's first setup and restarts the agent so it is used. Nil → POST
+	// /printer answers 503 PRINTER_CHOICE_UNAVAILABLE.
+	ChooseReceiptPrinter func(name string) error
+
 	// Scale is the store's label scale for PLU sync (POST
 	// /scale/sync-plu). Wired as a Config field rather than a third
 	// NewTwo parameter — same injection shape as CloudReporter. Nil →
@@ -246,6 +256,9 @@ func NewTwo(cfg Config, receiptPrinter, labelPrinter printer.Printer) (*Server, 
 	// is post-handshake, the web client always has a JWT before
 	// touching it.
 	mux.HandleFunc("GET /capabilities", s.requireAuth(s.handleCapabilities))
+	// First printer setup (simsim États G 14): the printers Windows knows, and the shop's pick.
+	mux.HandleFunc("GET /printers", s.requireAuth(s.handlePrinters))
+	mux.HandleFunc("POST /printer", s.requireAuth(s.handleChoosePrinter))
 	// Scale sync — /scale/sync-plu downloads the store's weighed-
 	// product PLU table to the LAN label scale. Same JWT gate as /print;
 	// surfaces 503 NO_SCALE_CONFIGURED when no scale is wired.

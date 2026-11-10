@@ -84,6 +84,11 @@ const (
 	// so the web client can branch on "the handshake endpoint itself says
 	// unpaired" vs "a protected endpoint rejected me."
 	CodeAgentUnpaired = "AGENT_UNPAIRED"
+
+	// First printer setup (simsim États G 14, 10 Nov 2026).
+	CodePrinterListUnavailable   = "PRINTER_LIST_UNAVAILABLE"
+	CodePrinterChoiceUnavailable = "PRINTER_CHOICE_UNAVAILABLE"
+	CodePrinterUnknown           = "PRINTER_UNKNOWN"
 	// The four JWT-verification failure codes. The requireAuth middleware
 	// maps jwt.ErrMalformed → JWT_INVALID, jwt.ErrBadSignature →
 	// SIGNATURE_INVALID, jwt.ErrExpired → JWT_EXPIRED, and does the
