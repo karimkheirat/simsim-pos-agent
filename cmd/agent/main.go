@@ -143,6 +143,7 @@ func runCmd(args []string) {
 		os.Exit(2)
 	}
 
+	activeConfigPath = *configPath
 	cfg, loadErr := loadAndOverride(*configPath, *printerSpec, *port, *logLevel, *heartbeatSeconds)
 	if loadErr != nil && !errors.Is(loadErr, config.ErrConfigMissing) {
 		fmt.Fprintf(os.Stderr, "%v\n", loadErr)
@@ -311,6 +312,11 @@ func runAsService() {
 		Logger:    logger,
 		Heartbeat: rt.Heartbeat,
 		ScaleSync: rt.ScaleSync,
+	}
+	// A printer picked in the web app's first setup restarts the service the way a self-update does.
+	restartForPrinter = func() {
+		prg.ShutdownForRestart()
+		exitForRestart(3)
 	}
 	if pathsErr != nil {
 		logger.Error("updater: cannot locate own executable; self-update disabled", "err", pathsErr.Error())
@@ -505,6 +511,9 @@ func buildRuntime(cfg config.Config, logger *slog.Logger, updateStatus func() an
 		// outcomes to the cloud's /api/pos-agent/print-verified. nil
 		// when no cloud is configured; api's defensive 503 surfaces.
 		CloudReporter: cloudReporterAdapter(cloudClient),
+		// First printer setup (simsim États G 14): list Windows' printers, take the shop's pick.
+		ListPrinters:         printer.ListInstalled,
+		ChooseReceiptPrinter: chooseReceiptPrinter,
 		// Scale sync — nil when no scale is configured; the
 		// /scale/sync-plu handler surfaces NO_SCALE_CONFIGURED.
 		Scale: scaleDev,
