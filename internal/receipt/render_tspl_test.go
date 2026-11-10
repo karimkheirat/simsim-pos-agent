@@ -111,3 +111,24 @@ func TestRenderTSPL_InvalidReceipt(t *testing.T) {
 		t.Errorf("empty receipt err = %v, want ErrInvalidReceipt", err)
 	}
 }
+
+// A line's working (the web app's unit of sale, "Pack · 6 × 2") prints under the line on a TSPL printer, as it
+// does on the ESC/POS paper; a line without one prints exactly as before.
+func TestRenderTSPL_LineDetail(t *testing.T) {
+	r := hamoudReceipt(t)
+	r.Lines[0].Detail = "Pack · 6 × 2"
+	got, err := RenderTSPL(r, tsplOpts(80))
+	if err != nil {
+		t.Fatalf("RenderTSPL: %v", err)
+	}
+	if !bytes.Contains(got, []byte("Pack")) {
+		t.Fatalf("the line's detail is not on the label")
+	}
+	plain, err := RenderTSPL(hamoudReceipt(t), tsplOpts(80))
+	if err != nil {
+		t.Fatalf("RenderTSPL: %v", err)
+	}
+	if bytes.Contains(plain, []byte("Pack ·")) {
+		t.Fatalf("a line without detail must print as before")
+	}
+}

@@ -204,6 +204,11 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 	emit(sep, 1, 1, false, false)
 	for _, l := range r.Lines {
 		emit(formatLine(l, w), 1, 1, false, true)
+		// The line's working, when the web app sends one (the unit of sale, "Pack · 6 × 2"; a weight working),
+		// printed under the line as the ESC/POS paper prints it. Absent → nothing more, as before.
+		if d := strings.TrimSpace(l.Detail); d != "" {
+			emit("  "+strings.TrimRight(truncatePad(d, w.receipt-2), " "), 1, 1, false, true)
+		}
 	}
 
 	// Top-level discounts (separate section per spec §7).
