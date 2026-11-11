@@ -178,3 +178,13 @@ jobs:
             build/release/${{ steps.agent_asset.outputs.name }}.sha256
           draft: false
           make_latest: true
+
+      # A manual run keeps its installer as a download on the run's page,
+      # for trying a build on a test PC before any release (ISSUE-115/116).
+      - name: Keep the test installer
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: simsim-pos-agent-setup-${{ steps.version.outputs.version }}
+          path: build/installer/simsim-pos-agent-setup-${{ steps.version.outputs.version }}.exe
+          retention-days: 14
