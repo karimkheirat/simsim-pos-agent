@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
 	"github.com/karimkheirat/simsim-pos-agent/internal/tspl"
 )
 
@@ -131,6 +132,48 @@ type tsplOp struct {
 	x, y, xMul, yMul int
 	s                string
 	cp               bool // transcode UTF-8 → CP1252 (French text)
+
+	// bitmap, when set, replaces the TEXT: the row held Arabic, which
+	// codepage 1252 cannot carry, and was drawn as a picture (BITMAP).
+	bitmap *tsplBitmap
+}
+
+// tsplBitmap is a packed picture of a row, cropped to its ink.
+type tsplBitmap struct {
+	widthBytes, height int
+	data               []byte
+}
+
+// tsplPicture draws a row that holds Arabic as a BITMAP op at (0, y): the
+// row laid out across widthDots in cells of the receipt font, cropped to
+// the bytes that hold ink. The picture is the row's whole pitch tall, so
+// the rows after it fall where they would have. ok is false when the row
+// holds no Arabic (the caller then emits TEXT exactly as before) or when
+// the fonts could not load.
+func tsplPicture(s string, y, widthDots int, cell tsplFontCell, xMul, yMul int, centered bool) (tsplOp, bool) {
+	if !arabic.Has(s) {
+		return tsplOp{}, false
+	}
+	al := arabic.Left
+	if centered {
+		al = arabic.Center
+	}
+	img, err := arabic.RenderLine(s, arabic.Layout{
+		Width: widthDots,
+		CellW: cell.w * xMul,
+		CellH: cell.h * yMul,
+		RowH:  cell.h*yMul + tsplLineGapDots,
+		Align: al,
+	})
+	if err != nil {
+		return tsplOp{}, false
+	}
+	xByte, wb, data := arabic.PackCropped(img, tspl.BitmapInkBit)
+	op := tsplOp{x: xByte * 8, y: y}
+	if wb > 0 {
+		op.bitmap = &tsplBitmap{widthBytes: wb, height: img.Bounds().Dy(), data: data}
+	}
+	return op, true
 }
 
 // RenderTSPL serializes a Receipt to a TSPL2 byte stream for TSPL-only
@@ -165,7 +208,13 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 				x = 0
 			}
 		}
-		ops = append(ops, tsplOp{x: x, y: y, xMul: xMul, yMul: yMul, s: s, cp: cp})
+		if op, ok := tsplPicture(s, y, opts.WidthDots, cell, xMul, yMul, centered); ok {
+			if op.bitmap != nil {
+				ops = append(ops, op)
+			}
+		} else {
+			ops = append(ops, tsplOp{x: x, y: y, xMul: xMul, yMul: yMul, s: s, cp: cp})
+		}
 		y += cell.h*yMul + tsplLineGapDots
 	}
 	// blank advances the cursor by one base row (mirrors a "\n" in the
@@ -274,7 +323,9 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 		Codepage("1252")
 
 	for _, o := range ops {
-		if o.cp {
+		if o.bitmap != nil {
+			b.Bitmap(o.x, o.y, o.bitmap.widthBytes, o.bitmap.height, tspl.BitmapOverwrite, o.bitmap.data)
+		} else if o.cp {
 			b.TextCP1252(o.x, o.y, opts.Font, 0, o.xMul, o.yMul, o.s)
 		} else {
 			b.Text(o.x, o.y, opts.Font, 0, o.xMul, o.yMul, o.s)
