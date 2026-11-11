@@ -93,9 +93,12 @@ type Config struct {
 	ListPrinters func() ([]printer.Installed, error)
 
 	// ChooseReceiptPrinter records the receipt printer the shop picked in the
-	// web app's first setup and restarts the agent so it is used. Nil → POST
-	// /printer answers 503 PRINTER_CHOICE_UNAVAILABLE.
-	ChooseReceiptPrinter func(name string) error
+	// web app's first setup and restarts the agent so it is used: spec is
+	// what config.json stores (a queue name, or "usb:<name>" for a printer
+	// the agent drives directly), language the receipt language the printer
+	// said it speaks ("" when it did not say: keep the configured one).
+	// Nil → POST /printer answers 503 PRINTER_CHOICE_UNAVAILABLE.
+	ChooseReceiptPrinter func(spec, language string) error
 
 	// Scale is the store's label scale for PLU sync (POST
 	// /scale/sync-plu). Wired as a Config field rather than a third

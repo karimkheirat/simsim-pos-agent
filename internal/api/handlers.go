@@ -35,6 +35,12 @@ type printerHealth struct {
 	Configured bool   `json:"configured"`
 	Reachable  bool   `json:"reachable"`
 	Name       string `json:"name"`
+	// Direct is true for a USB printer the agent drives itself, with no
+	// Windows driver (ISSUE-115).
+	Direct bool `json:"direct,omitempty"`
+	// Status is what the printer last said about itself (paper, cover,
+	// online). Only a direct printer can answer; absent otherwise.
+	Status *printer.Status `json:"status,omitempty"`
 }
 
 // handleHealth — flat response per spec §5.3 (not the standard envelope).
@@ -153,11 +159,18 @@ func statusFor(p printer.Printer) printerHealth {
 	if p == nil || p.Name() == "" {
 		return printerHealth{}
 	}
-	return printerHealth{
+	h := printerHealth{
 		Configured: true,
 		Reachable:  p.IsReachable(),
 		Name:       p.Name(),
 	}
+	if sr, ok := p.(printer.StatusReader); ok {
+		h.Direct = true
+		if st := sr.Status(); st.Known {
+			h.Status = &st
+		}
+	}
+	return h
 }
 
 // capabilitiesForPrinter returns the PrinterCapabilities for the
