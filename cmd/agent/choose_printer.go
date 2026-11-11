@@ -24,8 +24,10 @@ var restartForPrinter func()
 // chooseReceiptPrinter writes the printer the shop picked in the web app's
 // first setup (simsim États G 14) into config.json — both the receipt field
 // and the legacy one, as `write-config --printer` does — then restarts so the
-// new printer is the one used.
-func chooseReceiptPrinter(name string) error {
+// new printer is the one used. A printer that said which language it speaks
+// (a direct USB printer, ISSUE-115) also sets the receipt language, so a
+// label printer used for receipts needs no command line.
+func chooseReceiptPrinter(name, language string) error {
 	cfg, err := config.Load(activeConfigPath)
 	if err != nil && !errors.Is(err, config.ErrConfigMissing) {
 		return fmt.Errorf("load config: %w", err)
@@ -33,6 +35,9 @@ func chooseReceiptPrinter(name string) error {
 	config.Upgrade(&cfg)
 	cfg.PrinterName = name
 	cfg.ReceiptPrinterName = name
+	if language == "escpos" || language == "tspl" {
+		cfg.ReceiptPrinterLanguage = language
+	}
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

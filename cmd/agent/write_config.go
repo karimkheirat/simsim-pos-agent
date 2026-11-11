@@ -63,8 +63,15 @@ func runWriteConfig(args []string, stdout, stderr io.Writer) int {
 		// M13 Track B PR 1 — mirror the installer's --printer flag into
 		// both the legacy and the new receipt-printer field so a fresh
 		// config.json is forward-compatible with the two-printer wiring.
-		cfg.PrinterName = *printerName
-		cfg.ReceiptPrinterName = *printerName
+		// A name from `list-printers` that is a direct USB printer is
+		// stored as its "usb:" spec, and sets the receipt language the
+		// printer says it speaks unless --receipt-language is given.
+		spec, lang := resolvePrinterChoice(*printerName)
+		cfg.PrinterName = spec
+		cfg.ReceiptPrinterName = spec
+		if lang != "" && *receiptLanguage == "" {
+			cfg.ReceiptPrinterLanguage = lang
+		}
 	}
 	if *cloudBaseURL != "" {
 		cfg.CloudBaseURL = *cloudBaseURL

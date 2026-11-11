@@ -11,6 +11,61 @@ type Installed struct {
 	Name   string `json:"name"`
 	Driver string `json:"driver"`
 	Port   string `json:"port"`
+	// Direct is true for a USB printer the agent writes to itself, with no
+	// Windows driver or queue (ISSUE-115). Driver is then empty.
+	Direct bool `json:"direct,omitempty"`
+	// Language is the receipt language the printer says it speaks
+	// ("escpos", "tspl"), "" when it does not say or is a Windows queue.
+	Language string `json:"language,omitempty"`
+	// Spec is what config.json stores to find this printer again: the
+	// queue name, or "usb:<name>" for a direct printer. Not sent; the web
+	// app picks by Name.
+	Spec string `json:"-"`
+}
+
+// SpecOrName is the config value for this printer.
+func (i Installed) SpecOrName() string {
+	if i.Spec != "" {
+		return i.Spec
+	}
+	return i.Name
+}
+
+// mergeDirect puts the direct USB printers first and drops a Windows queue
+// that prints to the same USB port (it is the same physical printer, and the
+// direct path needs no driver). A device that could not tell its name is
+// skipped: there is nothing to show or to find it by.
+func mergeDirect(queues []Installed, devices []Device) []Installed {
+	out := make([]Installed, 0, len(queues)+len(devices))
+	ports := map[string]bool{}
+	names := map[string]bool{}
+	for _, q := range queues {
+		names[strings.ToLower(q.Name)] = true
+	}
+	for _, d := range devices {
+		name := d.ID.DisplayName()
+		if name == "" {
+			continue
+		}
+		if names[strings.ToLower(name)] {
+			name += " (USB)"
+		}
+		names[strings.ToLower(name)] = true
+		if p := d.Port(); p != "" {
+			ports[p] = true
+		}
+		out = append(out, Installed{
+			Name: name, Port: d.Port(), Direct: true, Language: d.ID.Language(),
+			Spec: USBSpecPrefix + name,
+		})
+	}
+	for _, q := range queues {
+		if q.Port != "" && ports[q.Port] {
+			continue
+		}
+		out = append(out, q)
+	}
+	return out
 }
 
 // IsVirtual reports printers that are not a device on the counter:

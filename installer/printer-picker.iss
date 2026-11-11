@@ -13,8 +13,10 @@
 //     printer_name field before launching `agent service install`.
 //
 // Detection flow on page activation:
-//   1. Shell `powershell.exe Get-Printer | Select -ExpandProperty Name`
-//      to a temp file (Inno's Exec doesn't capture stdout natively).
+//   1. Shell `agent.exe list-printers` (direct USB printers first, then
+//      Windows' queues; ISSUE-115), else `powershell.exe Get-Printer |
+//      Select -ExpandProperty Name`, to a temp file (Inno's Exec doesn't
+//      capture stdout natively).
 //   2. Three states from the result:
 //      a. Exec failed / non-zero exit -> DetectionFailed warning.
 //      b. Zero printers reported     -> NonePresent warning.
@@ -90,6 +92,7 @@ var
   TmpFile: String;
   Cmd: String;
   ResultCode: Integer;
+  AgentListed: Boolean;
   RawLines: TArrayOfString;
   Cleaned: TArrayOfString;
   i, count: Integer;
@@ -99,14 +102,39 @@ begin
   DetectionFailed := False;
   TmpFile := ExpandConstant('{tmp}\printers.txt');
 
-  // /C powershell ... > tmpfile 2>&1 -- capture both stdout and stderr;
-  // we only care about exit code + stdout content.
-  Cmd := '/C powershell.exe -NoProfile -Command "Get-Printer | Select-Object -ExpandProperty Name" > "' + TmpFile + '" 2>&1';
-
-  if not Exec(ExpandConstant('{cmd}'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  // ISSUE-115 -- ask the agent first: `agent.exe list-printers` also lists
+  // the USB printers it drives itself, which Windows does not list when
+  // they have no driver. Direct printers come first. Only if that fails
+  // (older build, extraction refused) do we fall back to Windows' list.
+  // Nested ifs, not "and": no reliance on short-circuit evaluation, so
+  // {cmd} is never run with an empty command line (it would wait forever).
+  AgentListed := False;
+  Cmd := '';
+  try
+    ExtractTemporaryFile('agent.exe');
+    Cmd := '/C ""' + ExpandConstant('{tmp}\agent.exe') + '" list-printers > "' + TmpFile + '" 2>nul"';
+  except
+    Cmd := '';
+  end;
+  if Cmd <> '' then
   begin
-    DetectionFailed := True;
-    Exit;
+    if Exec(ExpandConstant('{cmd}'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      if ResultCode = 0 then
+        AgentListed := True;
+    end;
+  end;
+
+  if not AgentListed then
+  begin
+    // /C powershell ... > tmpfile 2>&1 -- capture both stdout and stderr;
+    // we only care about exit code + stdout content.
+    Cmd := '/C powershell.exe -NoProfile -Command "Get-Printer | Select-Object -ExpandProperty Name" > "' + TmpFile + '" 2>&1';
+    if not Exec(ExpandConstant('{cmd}'), Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    begin
+      DetectionFailed := True;
+      Exit;
+    end;
   end;
   if ResultCode <> 0 then
   begin

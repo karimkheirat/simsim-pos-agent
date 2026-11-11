@@ -51,6 +51,7 @@ Usage:
   agent service stop
   agent service status
   agent write-config [flags]
+  agent list-printers          Print the printers the shop can pick, one per line
   agent --version
 
 Flags (run):
@@ -96,6 +97,8 @@ func main() {
 		serviceCmd(os.Args[2:])
 	case "write-config":
 		writeConfigCmd(os.Args[2:])
+	case "list-printers":
+		os.Exit(runListPrinters(os.Stdout, os.Stderr))
 	default:
 		// Unknown subcommands fall through to friendly usage.
 		printUsage()
@@ -464,11 +467,11 @@ func buildRuntime(cfg config.Config, logger *slog.Logger, updateStatus func() an
 	// Back-compat: config.Load mirrors a legacy `printer_name` into
 	// ReceiptPrinterName, so deployed pre-Track-B agents keep working
 	// without touching their config.json.
-	receiptP, err := newPrinterOrNil(cfg.ReceiptPrinterName, "receipt", logger)
+	receiptP, err := newPrinterOrNil(cfg.ReceiptPrinterName, "receipt", cfg.ReceiptPrinterLanguage, logger)
 	if err != nil {
 		return nil, err
 	}
-	labelP, err := newPrinterOrNil(cfg.LabelPrinterName, "label", logger)
+	labelP, err := newPrinterOrNil(cfg.LabelPrinterName, "label", "tspl", logger)
 	if err != nil {
 		return nil, err
 	}
@@ -628,12 +631,12 @@ func (s *cloudReporterShim) ReportPrintVerified(
 // returns (nil, nil) when spec is empty (operator has not configured
 // that role). Logs a kind-tagged warning on empty so the operator
 // pulling agent.log sees which role is unconfigured.
-func newPrinterOrNil(spec, kind string, logger *slog.Logger) (printer.Printer, error) {
+func newPrinterOrNil(spec, kind, language string, logger *slog.Logger) (printer.Printer, error) {
 	if spec == "" {
 		logger.Warn("no "+kind+" printer configured", "role", kind)
 		return nil, nil
 	}
-	p, err := printer.New(spec)
+	p, err := printer.NewWithLanguage(spec, language)
 	if err != nil {
 		return nil, fmt.Errorf("%s printer %q: %w", kind, spec, err)
 	}
