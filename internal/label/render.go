@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
 	"github.com/karimkheirat/simsim-pos-agent/internal/tspl"
 )
 
@@ -80,7 +81,7 @@ func Render(l Label, opts RenderOptions) ([]byte, error) {
 	// Elements — render in order so a template's z-order is preserved
 	// (later elements overpaint earlier ones at the same coordinates).
 	for i, e := range l.Elements {
-		if err := appendElement(b, e, opts.Dialect); err != nil {
+		if err := appendElement(b, e, opts.Dialect, l.Size.Width*dotsPerMM); err != nil {
 			return nil, fmt.Errorf("element[%d]: %w", i, err)
 		}
 	}
@@ -96,13 +97,16 @@ func Render(l Label, opts RenderOptions) ([]byte, error) {
 // Variable sanitization (CRLF / inner-quote scrubbing) is already
 // performed by the tspl builder methods (PR 1 — see sanitizeArg in
 // internal/tspl/tspl.go); no need to repeat it here.
-func appendElement(b *tspl.Builder, e Element, dialect tspl.Dialect) error {
+func appendElement(b *tspl.Builder, e Element, dialect tspl.Dialect, labelWidthDots int) error {
 	switch e.Type {
 	case ElementText:
 		// TextCP1252 transcodes the UTF-8 value to CP1252 (TSPL's
 		// printer codepage) — so French diacritics render as the
-		// intended glyphs. Arabic falls back to '?' per the codepage
-		// transcoder's contract.
+		// intended glyphs. Text holding Arabic, which 1252 cannot carry,
+		// is drawn as a picture instead (arabicText).
+		if arabicText(b, e, labelWidthDots) {
+			return nil
+		}
 		b.TextCP1252(e.X, e.Y, tspl.FontName(e.Font), e.Rotation, e.XScale, e.YScale, e.Value)
 		return nil
 
@@ -131,4 +135,82 @@ func appendElement(b *tspl.Builder, e Element, dialect tspl.Dialect) error {
 
 	// Should not be reachable post-Validate, but defensive.
 	return fmt.Errorf("unknown element type %q", e.Type)
+}
+
+// fontCells are the TSPL internal fonts' cells in dots at x1 (TSPL2
+// Programming Manual font table). ROMAN.TTF and any unknown font are
+// taken as font 2's 12x20; that guess only sizes an Arabic picture.
+var fontCells = map[string][2]int{
+	"1": {8, 12},
+	"2": {12, 20},
+	"3": {16, 24},
+	"4": {24, 32},
+	"5": {32, 48},
+}
+
+// arabicText draws a text element that holds Arabic as a BITMAP and
+// reports whether it did. The picture is the font's cell tall (times
+// YScale), its letters sized to that cell, starting at the element's X,Y
+// and squeezed to fit what is left of the label's width; a rotated
+// element's picture is turned the same way about the same corner, as
+// TEXT rotates. A text with no Arabic returns false and prints as TEXT,
+// byte for byte as before.
+func arabicText(b *tspl.Builder, e Element, labelWidthDots int) bool {
+	if !arabic.Has(e.Value) {
+		return false
+	}
+	cell, ok := fontCells[e.Font]
+	if !ok {
+		cell = fontCells["2"]
+	}
+	xs, ys := e.XScale, e.YScale
+	if xs < 1 {
+		xs = 1
+	}
+	if ys < 1 {
+		ys = 1
+	}
+	room := labelWidthDots - e.X
+	if e.Rotation == 90 || e.Rotation == 270 {
+		room = labelWidthDots // a turned line runs down the label; its length is not bounded by the width
+	}
+	if room < cell[0]*xs {
+		room = cell[0] * xs
+	}
+	img, err := arabic.RenderLine(e.Value, arabic.Layout{
+		Width: room,
+		CellW: cell[0] * xs,
+		CellH: cell[1] * ys,
+		RowH:  cell[1] * ys,
+		Align: arabic.Left,
+	})
+	if err != nil {
+		return false
+	}
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	img = arabic.Rotate(img, e.Rotation)
+	// Where the picture's top-left corner lands, so the text's origin
+	// corner stays at X,Y as TEXT's does when rotated clockwise.
+	x, y := e.X, e.Y
+	switch e.Rotation {
+	case 90:
+		x = e.X - h
+	case 180:
+		x, y = e.X-w, e.Y-h
+	case 270:
+		y = e.Y - w
+	}
+	xByte, wb, data := arabic.PackCropped(img, tspl.BitmapInkBit)
+	if wb == 0 {
+		return true
+	}
+	x += xByte * 8
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+	b.Bitmap(x, y, wb, img.Bounds().Dy(), tspl.BitmapOverwrite, data)
+	return true
 }
