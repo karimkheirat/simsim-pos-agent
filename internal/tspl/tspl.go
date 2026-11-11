@@ -327,3 +327,34 @@ func (b *Builder) QRCode(x, y int, eccLevel QRMode, cellWidth int, mode string, 
 func (b *Builder) Print(quantity, copies int) *Builder {
 	return b.Write(Print(quantity, copies))
 }
+
+// BitmapInkBit is the bit value of a PRINTED (black) dot in BITMAP data.
+// TSPL is the reverse of ESC/POS here: the TSC TSPL/TSPL2 Programming
+// Manual's BITMAP example draws its shape with 0 bits on a field of 1s
+// (0xFF bytes are blank paper), i.e. 0 = black, 1 = white. Unconfirmed on
+// the pilot's own printers (GP-3150TN, Rongta, Xprinter): if a test print
+// comes out as a negative, this constant is the one value to flip.
+const BitmapInkBit byte = 0
+
+// BitmapOverwrite is BITMAP mode 0: the image replaces what is under it.
+// (1 is OR, 2 is XOR.)
+const BitmapOverwrite = 0
+
+// Bitmap returns a BITMAP command: x,y in dots, widthBytes the row length
+// in bytes (eight dots a byte, leftmost dot in the most significant bit),
+// height in dots, mode BitmapOverwrite, then widthBytes*height raw bytes
+// whose bits follow BitmapInkBit, then CRLF.
+//
+// The data is binary and is not quoted or sanitized: the printer reads
+// exactly widthBytes*height bytes after the last comma, so a CR, LF or
+// quote byte inside it is image, not syntax.
+func Bitmap(x, y, widthBytes, height, mode int, data []byte) []byte {
+	out := []byte(fmt.Sprintf("BITMAP %d,%d,%d,%d,%d,", x, y, widthBytes, height, mode))
+	out = append(out, data...)
+	return append(out, crlf...)
+}
+
+// Bitmap appends a BITMAP line.
+func (b *Builder) Bitmap(x, y, widthBytes, height, mode int, data []byte) *Builder {
+	return b.Write(Bitmap(x, y, widthBytes, height, mode, data))
+}

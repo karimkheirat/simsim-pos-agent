@@ -259,3 +259,26 @@ func (b *Builder) CharSpacing(dots byte) *Builder {
 	b.buf = append(b.buf, CharSpacing(dots)...)
 	return b
 }
+
+// RasterImage returns GS v 0 m xL xH yL yH d1...dk — print a raster bit
+// image in normal mode (1D 76 30 00 ...). widthBytes is the row length in
+// bytes (eight dots a byte, leftmost dot in the most significant bit),
+// height the number of rows in dots; a set bit (1) prints a black dot.
+// data must hold widthBytes*height bytes, row after row.
+//
+// The image starts at the left margin and the paper advances by its
+// height; the printer needs no line feed after it.
+func RasterImage(widthBytes, height int, data []byte) []byte {
+	out := []byte{
+		0x1D, 0x76, 0x30, 0x00,
+		byte(widthBytes), byte(widthBytes >> 8),
+		byte(height), byte(height >> 8),
+	}
+	return append(out, data...)
+}
+
+// RasterImage appends GS v 0 with the given image.
+func (b *Builder) RasterImage(widthBytes, height int, data []byte) *Builder {
+	b.buf = append(b.buf, RasterImage(widthBytes, height, data)...)
+	return b
+}
