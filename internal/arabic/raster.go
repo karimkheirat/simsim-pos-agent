@@ -52,6 +52,11 @@ type Style struct {
 	Scale int
 	Align Align
 	Dots  int // printable width in dots (576 on 80 mm, 384 on 58 mm)
+	// CellW, when set, is the width in dots of one text column: the parts
+	// after the first end where they would end as text (column × CellW),
+	// so they line up with the text rows around them. Zero: last part at
+	// the right edge, middle parts centred.
+	CellW int
 }
 
 // bodyPx is the font's pixel size at Scale 1: about the height of the
@@ -69,6 +74,16 @@ var columnGap = regexp.MustCompile(` {2,}`)
 // "label   value" keeps its label at the left edge and its value at the
 // right; any other row sits where Style.Align puts it.
 func Row(s string, st Style) ([]byte, error) {
+	img, err := RowImage(s, st)
+	if err != nil {
+		return nil, err
+	}
+	return raster(img), nil
+}
+
+// RowImage draws the row as Row does and returns the 1-bit picture
+// (black below 128) for printers that take bitmaps another way (TSPL).
+func RowImage(s string, st Style) (*image.Gray, error) {
 	reg, bld, err := fonts()
 	if err != nil {
 		return nil, err
@@ -133,6 +148,19 @@ func Row(s string, st Style) ([]byte, error) {
 		place(texts[0], x)
 	default:
 		place(texts[0], 0)
+		if st.CellW > 0 {
+			// Re-place every part after the first at its column's end.
+			trimmed := strings.TrimSpace(s)
+			ends := columnEnds(trimmed)
+			for k := 1; k < len(texts) && k < len(ends); k++ {
+				x := ends[k]*st.CellW - widths[k]
+				if x+widths[k] > width {
+					x = width - widths[k]
+				}
+				place(texts[k], x)
+			}
+			break
+		}
 		place(texts[len(texts)-1], width-widths[len(widths)-1])
 		// Middle parts, if any, centred in what is left.
 		if len(parts) > 2 {
@@ -148,7 +176,29 @@ func Row(s string, st Style) ([]byte, error) {
 		}
 	}
 	face.Close()
-	return raster(img), nil
+	return img, nil
+}
+
+// TSPLBitmap encodes img as the data of a TSPL BITMAP command: row-major,
+// 8 dots a byte, most significant bit first, and — TSPL's convention — a
+// 0 bit prints black. Returns the width in bytes and the height in dots.
+func TSPLBitmap(img *image.Gray) (data []byte, widthBytes, height int) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	bw := (w + 7) / 8
+	data = make([]byte, 0, bw*h)
+	for y := 0; y < h; y++ {
+		for xb := 0; xb < bw; xb++ {
+			b := byte(0xFF)
+			for bit := 0; bit < 8; bit++ {
+				x := xb*8 + bit
+				if x < w && img.GrayAt(x, y).Y < 128 {
+					b &^= 0x80 >> bit
+				}
+			}
+			data = append(data, b)
+		}
+	}
+	return data, bw, h
 }
 
 // raster encodes img as GS v 0 (normal density) followed by nothing: the
@@ -170,4 +220,24 @@ func raster(img *image.Gray) []byte {
 		}
 	}
 	return out
+}
+
+// columnEnds returns, for each part of a laid-out row (parts split by runs
+// of two or more spaces), the rune column just past its last character.
+func columnEnds(s string) []int {
+	var ends []int
+	rs := []rune(s)
+	i := 0
+	for i < len(rs) {
+		j := i
+		for j < len(rs) && !(rs[j] == ' ' && j+1 < len(rs) && rs[j+1] == ' ') {
+			j++
+		}
+		ends = append(ends, j)
+		for j < len(rs) && rs[j] == ' ' {
+			j++
+		}
+		i = j
+	}
+	return ends
 }
