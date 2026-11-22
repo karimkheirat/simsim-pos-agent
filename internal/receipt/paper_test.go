@@ -116,15 +116,15 @@ func TestPaper_Ticket80_HeadBodyFoot(t *testing.T) {
 		"23/09/2026 14:32", // 13:32Z at the shop's UTC+1
 		"Caisse 02 · Amine B.",
 		strings.Repeat("-", 42),
-		"Lait Candia - demi-écrémé 1 L       240 DA",
-		"2 × 120 DA",
-		"Olives noires vrac                  130 DA",
+		"Lait Candia - demi-écrémé 1 L    240,00 DA",
+		"2 × 120,00 DA",
+		"Olives noires vrac               130,00 DA",
 		"0,342 kg × 380 DA/kg",
 		strings.Repeat("-", 42),
-		"TOTAL          370 DA", // double width: 21 columns
+		"TOTAL       370,00 DA", // double width: 21 columns
 		strings.Repeat("-", 42),
-		"Espèces                             400 DA",
-		"Monnaie                              30 DA",
+		"Espèces                          400,00 DA",
+		"Monnaie                           30,00 DA",
 		strings.Repeat("-", 42),
 		"Client K7M2QX · Karim B.",
 		"Merci de votre visite !",
@@ -164,11 +164,11 @@ func TestPaper_Ticket58_Reflow(t *testing.T) {
 		// terminal and cashier on their own rows at 58 mm
 		"Caisse 02\nAmine B.\n",
 		// the name alone, then q × prix sharing a row with the amount
-		"Lait Candia - demi-écrémé 1 L\n2 × 120 DA                240 DA\n",
-		"Olives noires vrac\n0,342 kg × 380 DA/kg      130 DA\n",
+		"Lait Candia - demi-écrémé 1 L\n2 × 120,00 DA          240,00 DA\n",
+		"Olives noires vrac\n0,342 kg × 380 DA/kg   130,00 DA\n",
 		// a long working pushes the amount, right-aligned, below
 		"Fromage\n0,450 kg × 2 743,33 DA/kg ·\npromo\n                     1 234,50 DA\n",
-		"TOTAL     370 DA\n", // 16 columns at double width
+		"TOTAL  370,00 DA\n", // 16 columns at double width
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("58 mm ticket missing %q\n%s", want, got)
@@ -233,7 +233,7 @@ func TestPaper_LineDiscount(t *testing.T) {
 	r.Lines = []Line{{Name: "Café", Qty: 1, UnitPrice: 200, LineTotal: 180, DiscountLabel: &lbl}}
 	r.Totals = Totals{Subtotal: 180, GrandTotal: 180}
 	text, _ := renderText(t, r, 80)
-	if !strings.Contains(text, "\n1 × 200 DA\nRemise 10 %\n") {
+	if !strings.Contains(text, "\n1 × 200,00 DA\nRemise 10 %\n") {
 		t.Errorf("line discount: want the working then the discount:\n%s", text)
 	}
 }
@@ -282,8 +282,8 @@ func TestPaper_Rapport_SectionsKindsBold(t *testing.T) {
 	text, raw := renderText(t, r, 80)
 	got := strings.Join(lines(text), "\n")
 	for _, want := range []string{
-		"\nVENTES\nTransactions                             7\nTotal ventes                     18 378 DA\n" + strings.Repeat("-", 42) + "\nCAISSE\n",
-		"Écart                            -1 200 DA",
+		"\nVENTES\nTransactions                             7\nTotal ventes                  18 378,00 DA\n" + strings.Repeat("-", 42) + "\nCAISSE\n",
+		"Écart                         -1 200,00 DA",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q\n%s", want, got)
@@ -331,8 +331,8 @@ func TestPaperMoney(t *testing.T) {
 		in   float64
 		want string
 	}{
-		{0, "0 DA"}, {370, "370 DA"}, {1000, "1 000 DA"}, {-62, "-62 DA"},
-		{12.5, "12,50 DA"}, {1234567.891, "1 234 567,89 DA"}, {-0.001, "0 DA"},
+		{0, "0,00 DA"}, {370, "370,00 DA"}, {1000, "1 000,00 DA"}, {-62, "-62,00 DA"},
+		{12.5, "12,50 DA"}, {1234567.891, "1 234 567,89 DA"}, {-0.001, "0,00 DA"},
 	} {
 		if got := paperMoney(tt.in, "DA"); got != tt.want {
 			t.Errorf("paperMoney(%v) = %q, want %q", tt.in, got, tt.want)

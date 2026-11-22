@@ -2,6 +2,8 @@ package receipt
 
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"math"
 	"strconv"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
+	"rsc.io/qr"
 )
 
 // THE TILL'S PAPER on ESC/POS — the ticket de caisse and the rapport de
@@ -146,12 +149,40 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 		return nil, err
 	}
 
+	b := escpos.New().Init().Codepage(escpos.CP858)
 	p := page{
-		b:      escpos.New().Init().Codepage(escpos.CP858),
+		out:    &escposOut{b: b},
 		width:  widthsFor(opts.PaperWidthMM).receipt,
 		narrow: opts.PaperWidthMM == 58,
 		dots:   dotsFor(opts.PaperWidthMM),
+		loc:    opts.Location,
 	}
+	p.write(r)
+
+	// Final feed + cut/no-cut + optional drawer.
+	//
+	// Cut-supported (default for SP-331, TM-T20, etc.) — 4 feed lines to
+	// clear the print head + GS V 0 full cut.
+	//
+	// Cut-unsupported (manual-tear printers) — 8 feed lines (no cut) so
+	// the cashier has visible perforation distance to tear the receipt
+	// cleanly. 8 lines is roughly the receipt-paper standoff + tear-bar
+	// offset on common Algeria-realistic no-cut models.
+	if opts.CutSupported {
+		b.Text("\n\n\n\n").CutFull()
+	} else {
+		b.Text("\n\n\n\n\n\n\n\n")
+	}
+	if opts.OpenDrawerAfter {
+		b.DrawerKick()
+	}
+
+	return b.Bytes(), nil
+}
+
+// write lays the whole document out on the page: head (§67.2), body, foot
+// (+ the Code 128 on a ticket). Shared by the ESC/POS and TSPL renders.
+func (p *page) write(r Receipt) {
 	doc := documentOf(r)
 	cur := currencyWord(r.Currency)
 
@@ -165,7 +196,7 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 		}
 		// The LF stays outside the tall scope so the feed advances at
 		// normal height.
-		p.b.Size(1, storeHeight).TextCP858(s).Size(1, 1).Text("\n")
+		p.out.text(s, 1, storeHeight, true)
 	}
 	p.setBold(false)
 	for _, s := range []string{r.Store.AddressLine1, r.Store.AddressLine2, r.Store.Phone, r.Store.TaxID} {
@@ -175,14 +206,14 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 	p.rule()
 
 	p.setBold(true)
-	p.b.CharSpacing(1)
+	p.out.setSpacing(1)
 	for _, s := range wrap(strings.ToUpper(doc.title), p.width-p.width/12) {
 		p.line(s)
 	}
-	p.b.CharSpacing(0)
+	p.out.setSpacing(0)
 	p.setBold(false)
 	p.text(doc.number)
-	p.text(paperDateTime(r.IssuedAt, opts.Location))
+	p.text(paperDateTime(r.IssuedAt, p.loc))
 	if p.narrow {
 		p.text(r.Terminal.Label)
 		p.text(r.Cashier.Name)
@@ -208,41 +239,25 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 		}
 		p.setAlign(escpos.Left)
 	}
+	if !doc.report {
+		p.shopperInvite(r.ShopperInvite)
+	}
 	if !doc.report && doc.number != "" {
 		p.setAlign(escpos.Center)
 		p.barcode(doc.number)
 		p.setAlign(escpos.Left)
 	}
-
-	// Final feed + cut/no-cut + optional drawer.
-	//
-	// Cut-supported (default for SP-331, TM-T20, etc.) — 4 feed lines to
-	// clear the print head + GS V 0 full cut.
-	//
-	// Cut-unsupported (manual-tear printers) — 8 feed lines (no cut) so
-	// the cashier has visible perforation distance to tear the receipt
-	// cleanly. 8 lines is roughly the receipt-paper standoff + tear-bar
-	// offset on common Algeria-realistic no-cut models.
-	if opts.CutSupported {
-		p.b.Text("\n\n\n\n").CutFull()
-	} else {
-		p.b.Text("\n\n\n\n\n\n\n\n")
-	}
-	if opts.OpenDrawerAfter {
-		p.b.DrawerKick()
-	}
-
-	return p.b.Bytes(), nil
 }
 
 // page is one render in progress: the byte builder plus the roll's geometry.
 type page struct {
-	b      *escpos.Builder
+	out    paperOut
 	bold   bool             // what the builder was last told, for Arabic rows
 	align  escpos.Alignment // likewise
 	width  int              // columns at body size
 	narrow bool             // 58 mm reflow
 	dots   int              // printable dots across
+	loc    *time.Location   // the shop's clock for a UTC time (nil: the machine's)
 }
 
 // text writes s wrapped to the page width, one LF per row, in whatever
@@ -263,7 +278,7 @@ func (p *page) line(s string) {
 	if p.arabic(s, 1) {
 		return
 	}
-	p.b.TextCP858(s + "\n")
+	p.out.text(s, 1, 1, true)
 }
 
 // arabic draws s as a raster row at the given size when it holds Arabic,
@@ -280,30 +295,22 @@ func (p *page) arabic(s string, scale int) bool {
 	case escpos.Right:
 		al = arabic.Right
 	}
-	img, err := arabic.Row(s, arabic.Style{Bold: p.bold, Scale: scale, Align: al, Dots: p.dots})
-	if err != nil {
-		return false
-	}
-	// The image is the full width; justification would only shift it.
-	p.b.Align(escpos.Left)
-	p.b.Write(img)
-	p.b.Align(p.align)
-	return true
+	return p.out.arabic(s, arabic.Style{Bold: p.bold, Scale: scale, Align: al, Dots: p.dots})
 }
 
 func (p *page) setBold(on bool) {
 	p.bold = on
-	p.b.Bold(on)
+	p.out.setBold(on)
 }
 
 func (p *page) setAlign(a escpos.Alignment) {
 	p.align = a
-	p.b.Align(a)
+	p.out.setAlign(a)
 }
 
 // rule is a dashed full-width divider.
 func (p *page) rule() {
-	p.b.Text(strings.Repeat("-", p.width) + "\n")
+	p.out.text(strings.Repeat("-", p.width), 1, 1, false)
 }
 
 // row writes label left and value right.
@@ -378,13 +385,11 @@ func (p *page) total(label, amount string) {
 		return
 	}
 	if cols := p.width / totalScale; runeLen(label)+1+runeLen(amount) <= cols {
-		p.b.Size(totalScale, totalScale).TextCP858(padBetween(label, amount, cols))
+		p.out.text(padBetween(label, amount, cols), totalScale, totalScale, true)
 	} else {
-		p.b.Size(1, totalScale).TextCP858(padBetween(label, amount, p.width))
+		p.out.text(padBetween(label, amount, p.width), 1, totalScale, true)
 	}
-	p.b.Size(1, 1)
 	p.setBold(false)
-	p.b.Text("\n")
 }
 
 // reportRows prints the rapport's rows as sent, in order — the CAISSE rows
@@ -423,17 +428,73 @@ func (p *page) reportRows(lines []Line, cur string) {
 // symbol fits the printable width; a symbol that fits at none, or holds a
 // non-ASCII character, is skipped and only the number prints.
 func (p *page) barcode(data string) {
-	modules := escpos.Code128Modules(data)
+	// Ten modules of white each side (the symbology's quiet zone) count
+	// toward the fit, so a scanner finds where the symbol starts.
+	modules := escpos.Code128Modules(data) + 20
 	for _, m := range []int{3, 2, 1} {
 		if modules*m > p.dots {
 			continue
 		}
-		if cmd, err := escpos.Code128(data, barcodeHeightDots, byte(m), escpos.HRINone); err == nil {
-			p.b.Write(cmd)
-		}
+		p.out.barcode(data, m, barcodeHeightDots)
 		break
 	}
 	p.text(data)
+}
+
+// shopperQRDots is about how wide the shopper QR prints: some 20 mm at
+// 203 dpi, large enough for a phone at arm's length on a crumpled ticket.
+const shopperQRDots = 168
+
+// shopperInvite prints the shopper app's invitation and QR, centred, under
+// a rule. Nothing when the request carries none (the shopper app is not out)
+// or the link cannot be encoded.
+func (p *page) shopperInvite(inv *ShopperInvite) {
+	if inv == nil || strings.TrimSpace(inv.URL) == "" {
+		return
+	}
+	img, err := qrImage(strings.TrimSpace(inv.URL), shopperQRDots)
+	if err != nil {
+		return
+	}
+	p.rule()
+	p.setAlign(escpos.Center)
+	p.text(inv.Text)
+	p.out.picture(img)
+	p.setAlign(escpos.Left)
+}
+
+// qrImage draws url as a QR code (error correction M) about target dots
+// wide: whole dots a module, a four-module white margin round it, the width
+// a multiple of 8 so both printer kinds take it as is.
+func qrImage(url string, target int) (*image.Gray, error) {
+	code, err := qr.Encode(url, qr.M)
+	if err != nil {
+		return nil, err
+	}
+	n := code.Size
+	m := target / (n + 8)
+	if m < 2 {
+		m = 2
+	}
+	side := ((n+8)*m + 7) &^ 7
+	off := (side - n*m) / 2
+	img := image.NewGray(image.Rect(0, 0, side, side))
+	for i := range img.Pix {
+		img.Pix[i] = 0xFF
+	}
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			if !code.Black(x, y) {
+				continue
+			}
+			for dy := 0; dy < m; dy++ {
+				for dx := 0; dx < m; dx++ {
+					img.SetGray(off+x*m+dx, off+y*m+dy, color.Gray{})
+				}
+			}
+		}
+	}
+	return img, nil
 }
 
 // lineWorking returns the working printed under a ticket line, and any
@@ -468,14 +529,21 @@ func currencyWord(code string) string {
 	}
 }
 
-// paperMoney mirrors the web's paperMoney: "1 000 DA", "-62 DA", "12,50 DA"
-// — whole amounts without decimals, a fractional one with two, thousands
-// grouped by a space, an ASCII minus (CP858 has no U+2212).
+// paperMoney mirrors the web's paperMoney: "1 000,00 DA", "-62,00 DA" —
+// always two decimals (the ruled Money row, 23 Sep 2026: the till, the
+// screen and the paper print money one way), thousands grouped by a space,
+// an ASCII minus (CP858 has no U+2212).
 func paperMoney(v float64, cur string) string {
-	return paperNumber(v) + " " + cur
+	cents := int64(math.Round(math.Abs(v) * 100))
+	body := group(strconv.FormatInt(cents/100, 10)) + fmt.Sprintf(",%02d", cents%100)
+	if v < 0 && cents != 0 {
+		body = "-" + body
+	}
+	return body + " " + cur
 }
 
-// paperNumber is paperMoney without the currency.
+// paperNumber is a bare figure (a rapport row the wire does not mark as
+// money, e.g. a count): whole without decimals, a fraction with two.
 func paperNumber(v float64) string {
 	cents := int64(math.Round(math.Abs(v) * 100))
 	body := group(strconv.FormatInt(cents/100, 10))
