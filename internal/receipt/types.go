@@ -34,6 +34,19 @@ type Receipt struct {
 	Shopper string `json:"shopper,omitempty"`
 	// Labels are the words of the totals and tender block.
 	Labels *Labels `json:"labels,omitempty"`
+
+	// ShopperInvite, when the web app sends it, prints the Molshi shopper
+	// app's QR code with its one-line invitation at the foot of a ticket,
+	// above the ticket's own barcode. The web app sends it only once the
+	// shopper app ships (founder, 22 Nov 2026: built in, switched off until
+	// then); absent, nothing prints.
+	ShopperInvite *ShopperInvite `json:"shopper_invite,omitempty"`
+}
+
+// ShopperInvite is the shopper app's QR and the words printed above it.
+type ShopperInvite struct {
+	URL  string `json:"url"`
+	Text string `json:"text"`
 }
 
 // Labels are the fixed words the ticket prints around the figures. Any

@@ -241,3 +241,8 @@ func columnEnds(s string) []int {
 	}
 	return ends
 }
+
+// Raster encodes a picture whose width is a multiple of 8 as ESC/POS
+// GS v 0, as Row does for a row of Arabic. The receipt uses it for any
+// other picture it prints (the shopper QR).
+func Raster(img *image.Gray) []byte { return raster(img) }

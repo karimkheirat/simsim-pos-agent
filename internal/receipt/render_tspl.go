@@ -1,10 +1,15 @@
 package receipt
 
 import (
-	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
+	"image"
+	"image/color"
 	"math"
 	"strings"
+	"time"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
+	"github.com/karimkheirat/simsim-pos-agent/internal/code128"
+	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 	"github.com/karimkheirat/simsim-pos-agent/internal/tspl"
 )
 
@@ -12,13 +17,15 @@ import (
 // TSPL-only thermal printers (which cannot parse ESC/POS) — e.g. the
 // Gprinter GP-3150TN at the pilot store — can print customer receipts.
 //
-// It mirrors the ESC/POS layout in render.go SECTION-FOR-SECTION and
-// reuses the same column/format helpers (formatLine, formatTotalLine,
-// formatGrandTotalLine, formatDate, widthsFor, validate). The only
-// difference is the output language: instead of ESC/POS control bytes
-// it emits positioned TSPL TEXT commands via internal/tspl — the SAME
-// TSPL engine the label path uses (we reuse the engine, not the
-// label.Label document type, whose Validate caps height at 150mm).
+// The layout is NOT its own: it is paper.go's, written once against
+// paperOut, so a ticket on a TSPL printer reads exactly as on an ESC/POS
+// one — the document's name and number, each line's working under it
+// ("0,750 kg × 150,00 DA/kg" for a weighed line), "DA" after every amount,
+// and the Code 128 of the ticket's number that the till scans to reopen the
+// sale. (Until v0.3.17 this file had a layout of its own, which printed none
+// of the three.) Only the output language differs: positioned TSPL TEXT
+// commands via internal/tspl — the SAME TSPL engine the label path uses —
+// with Arabic rows and the barcode drawn as BITMAPs.
 //
 // Continuous media: TSPL is page-oriented (SIZE w,h before any drawing),
 // but a receipt's height is unknown until laid out. So this is a
@@ -93,8 +100,13 @@ type TSPLReceiptOptions struct {
 	Density int
 	Speed   int
 
-	// Dialect is reserved (receipts carry no EAN-13 today, so the
-	// standard/rongta split is unused). Defaults to DialectStandard.
+	// Location is the shop's clock for a UTC issued_at (nil: the
+	// machine's), as RenderOptions.Location.
+	Location *time.Location
+
+	// Dialect is reserved (receipts carry no EAN-13, and the Code 128 is
+	// drawn as a bitmap, so the standard/rongta split is unused). Defaults
+	// to DialectStandard.
 	Dialect tspl.Dialect
 }
 
@@ -127,21 +139,122 @@ func (o TSPLReceiptOptions) withDefaults() TSPLReceiptOptions {
 	return o
 }
 
-// tsplOp is one positioned text element captured during pass 1.
+// tsplOp is one positioned element captured during pass 1.
 type tsplOp struct {
 	x, y, xMul, yMul int
 	s                string
 	cp               bool // transcode UTF-8 → CP1252 (French text)
 
-	// bitmap, when set, replaces the text: a row holding Arabic drawn as
-	// a picture (internal/arabic), since TSPL fonts carry no Arabic.
+	// bitmap, when set, replaces the text: a row holding Arabic, or the
+	// Code 128, drawn as a picture.
 	bitmap       []byte
 	bitmapWidthB int
 	bitmapHeight int
 }
 
+// tsplOut is paperOut on a TSPL page: pass 1 of the render. It lays every
+// row out at a Y cursor in dots; RenderTSPL then emits them.
+type tsplOut struct {
+	opts  TSPLReceiptOptions
+	cell  tsplFontCell
+	align escpos.Alignment
+	y     int
+	ops   []tsplOp
+}
+
+// TSPL bitmap fonts have no bold and no character spacing; the document
+// name keeps its weight from being UPPER, as the browser sheet does on a
+// printer without bold.
+func (o *tsplOut) setBold(bool)                {}
+func (o *tsplOut) setSpacing(byte)             {}
+func (o *tsplOut) setAlign(a escpos.Alignment) { o.align = a }
+
+// xFor is where a row of w dots starts under the current alignment.
+func (o *tsplOut) xFor(w int) int {
+	x := 0
+	switch o.align {
+	case escpos.Center:
+		x = (o.opts.WidthDots - w) / 2
+	case escpos.Right:
+		x = o.opts.WidthDots - w
+	}
+	if x < 0 {
+		x = 0
+	}
+	return x
+}
+
+func (o *tsplOut) text(s string, xMul, yMul int, cp bool) {
+	// The web app keeps a figure and its unit together with a no-break
+	// space ("0,750 kg"); a TSPL bitmap font has no glyph it can be trusted
+	// to draw for one, and the row is laid out already.
+	s = strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(s)
+	o.ops = append(o.ops, tsplOp{x: o.xFor(runeLen(s) * o.cell.w * xMul), y: o.y, xMul: xMul, yMul: yMul, s: s, cp: cp})
+	o.y += o.cell.h*yMul + tsplLineGapDots
+}
+
+func (o *tsplOut) arabic(s string, st arabic.Style) bool {
+	st.Dots = o.opts.WidthDots
+	st.CellW = o.cell.w * st.Scale
+	img, err := arabic.RowImage(s, st)
+	if err != nil {
+		return false
+	}
+	data, wb, h := arabic.TSPLBitmap(img)
+	o.ops = append(o.ops, tsplOp{y: o.y, bitmap: data, bitmapWidthB: wb, bitmapHeight: h})
+	o.y += h + tsplLineGapDots
+	return true
+}
+
+// barcode draws the Code 128 as a BITMAP rather than a BARCODE command:
+// the symbol is then exactly the set-B symbol the ESC/POS path asks for,
+// of a width known here (so it centres), whatever the printer's firmware
+// would choose for "128".
+func (o *tsplOut) barcode(data string, moduleDots, heightDots int) bool {
+	mods, err := code128.Modules(data)
+	if err != nil {
+		return false
+	}
+	// The picture is the whole row, so the bars sit centred with their
+	// quiet zones white on each side, and the bitmap starts at x 0 (a
+	// bitmap's x is in whole bytes on some firmware).
+	width := (o.opts.WidthDots + 7) &^ 7
+	left := (width - len(mods)*moduleDots) / 2
+	if left < 0 {
+		return false
+	}
+	img := image.NewGray(image.Rect(0, 0, width, heightDots))
+	for i := range img.Pix {
+		img.Pix[i] = 0xFF
+	}
+	for i, bar := range mods {
+		if !bar {
+			continue
+		}
+		for dx := 0; dx < moduleDots; dx++ {
+			for y := 0; y < heightDots; y++ {
+				img.SetGray(left+i*moduleDots+dx, y, color.Gray{})
+			}
+		}
+	}
+	bits, wb, h := arabic.TSPLBitmap(img)
+	x := 0
+	o.y += tsplLineGapDots * 2
+	o.ops = append(o.ops, tsplOp{x: x, y: o.y, bitmap: bits, bitmapWidthB: wb, bitmapHeight: h})
+	o.y += h + tsplLineGapDots
+	return true
+}
+
+func (o *tsplOut) picture(img *image.Gray) bool {
+	bits, wb, h := arabic.TSPLBitmap(img)
+	x := o.xFor(wb*8) &^ 7
+	o.ops = append(o.ops, tsplOp{x: x, y: o.y, bitmap: bits, bitmapWidthB: wb, bitmapHeight: h})
+	o.y += h + tsplLineGapDots
+	return true
+}
+
 // RenderTSPL serializes a Receipt to a TSPL2 byte stream for TSPL-only
-// printers. Layout mirrors Render (ESC/POS) section-for-section. Returns
+// printers, laid out by paper.go exactly as Render lays it out. Returns
 // ErrInvalidReceipt (wrapped) for malformed input — same validation as
 // the ESC/POS path.
 func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
@@ -154,122 +267,20 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 	if !ok {
 		cell = tsplFontCells[tspl.Font2]
 	}
-	w := widthsFor(opts.PaperWidthMM)
 
 	// ── Pass 1: lay out, tracking the Y cursor in dots ──
-	var ops []tsplOp
-	y := tsplTopMarginDots
-
-	// emit places a text row at the current cursor and advances Y.
-	// centered=true horizontally centers within WidthDots; otherwise the
-	// row starts at x=0 (the monospace column block, byte-identical to
-	// the ESC/POS formatLine output). cp=true transcodes French text.
-	emit := func(s string, xMul, yMul int, centered, cp bool) {
-		if arabic.HasArabic(s) {
-			al := arabic.Left
-			if centered {
-				al = arabic.Center
-			}
-			if img, err := arabic.RowImage(s, arabic.Style{Scale: yMul, Align: al, Dots: opts.WidthDots, CellW: cell.w * xMul}); err == nil {
-				data, wb, h := arabic.TSPLBitmap(img)
-				ops = append(ops, tsplOp{x: 0, y: y, bitmap: data, bitmapWidthB: wb, bitmapHeight: h})
-				y += h + tsplLineGapDots
-				return
-			}
-		}
-		x := 0
-		if centered {
-			textDots := len([]rune(s)) * cell.w * xMul
-			if x = (opts.WidthDots - textDots) / 2; x < 0 {
-				x = 0
-			}
-		}
-		ops = append(ops, tsplOp{x: x, y: y, xMul: xMul, yMul: yMul, s: s, cp: cp})
-		y += cell.h*yMul + tsplLineGapDots
+	out := &tsplOut{opts: opts, cell: cell, y: tsplTopMarginDots}
+	p := page{
+		out:    out,
+		width:  widthsFor(opts.PaperWidthMM).receipt,
+		narrow: opts.PaperWidthMM == 58,
+		dots:   opts.WidthDots,
+		loc:    opts.Location,
 	}
-	// blank advances the cursor by one base row (mirrors a "\n" in the
-	// ESC/POS renderer).
-	blank := func() { y += cell.h + tsplLineGapDots }
-
-	// Header — centered. Store name double-height (yMul=2), matching the
-	// ESC/POS DoubleHeight in render.go.
-	emit(r.Store.Name, 1, 2, true, true)
-	if r.Store.AddressLine1 != "" {
-		emit(r.Store.AddressLine1, 1, 1, true, true)
-	}
-	if r.Store.AddressLine2 != "" {
-		emit(r.Store.AddressLine2, 1, 1, true, true)
-	}
-	if r.Store.Phone != "" {
-		emit(r.Store.Phone, 1, 1, true, true)
-	}
-	if r.Store.TaxID != "" {
-		emit(r.Store.TaxID, 1, 1, true, true)
-	}
-	blank()
-
-	// Receipt info.
-	emit("Ticket N°: "+r.ReceiptNumber, 1, 1, false, true)
-	emit(formatDate(r.IssuedAt), 1, 1, false, true)
-	if r.Cashier.Name != "" {
-		emit("Caissier: "+r.Cashier.Name, 1, 1, false, true)
-	}
-	if r.Terminal.Label != "" {
-		emit("Terminal: "+r.Terminal.Label, 1, 1, false, true)
-	}
-
-	// Items.
-	sep := strings.Repeat("-", w.receipt)
-	emit(sep, 1, 1, false, false)
-	for _, l := range r.Lines {
-		emit(formatLine(l, w), 1, 1, false, true)
-		// The line's working, when the web app sends one (the unit of sale, "Pack · 6 × 2"; a weight working),
-		// printed under the line as the ESC/POS paper prints it. Absent → nothing more, as before.
-		if d := strings.TrimSpace(l.Detail); d != "" {
-			emit("  "+strings.TrimRight(truncatePad(d, w.receipt-2), " "), 1, 1, false, true)
-		}
-	}
-
-	// Top-level discounts (separate section per spec §7).
-	if len(r.Discounts) > 0 {
-		emit(sep, 1, 1, false, false)
-		for _, d := range r.Discounts {
-			emit(formatTotalLine(d.Label, d.Amount, w.receipt), 1, 1, false, true)
-		}
-	}
-
-	// Totals.
-	emit(sep, 1, 1, false, false)
-	emit(formatTotalLine("Sous-total", r.Totals.Subtotal, w.receipt), 1, 1, false, true)
-	if r.Totals.DiscountTotal != 0 {
-		emit(formatTotalLine("Remise", r.Totals.DiscountTotal, w.receipt), 1, 1, false, true)
-	}
-	if r.Totals.TaxTotal != 0 {
-		emit(formatTotalLine("TVA", r.Totals.TaxTotal, w.receipt), 1, 1, false, true)
-	}
-	// Grand total — double-height (yMul=2), matching render.go.
-	emit(formatGrandTotalLine("Total", r.Totals.GrandTotal, r.Currency, w.receipt), 1, 2, false, true)
-
-	// Payment block. v1 supports cash only.
-	blank()
-	if r.Payment.Method == "cash" {
-		words := labelsFor(r) // SIM-170: change reads "Monnaie", or the word sent
-		emit(formatTotalLine(words.Cash, r.Payment.Tendered, w.receipt), 1, 1, false, true)
-		emit(formatTotalLine(words.Change, r.Payment.Change, w.receipt), 1, 1, false, true)
-	} else {
-		emit("Paiement: "+r.Payment.Method, 1, 1, false, true)
-	}
-
-	// Footer — centered.
-	if len(r.FooterLines) > 0 {
-		blank()
-		for _, fl := range r.FooterLines {
-			emit(fl, 1, 1, true, true)
-		}
-	}
+	p.write(r)
 
 	// Tear clearance below the last line (no cut on TSPL).
-	y += tsplBottomMarginDots
+	y := out.y + tsplBottomMarginDots
 
 	// ── Pass 2: emit the pre-amble with the computed height, then the
 	// positioned elements, then PRINT. ──
@@ -292,7 +303,7 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 		Speed(opts.Speed).
 		Codepage("1252")
 
-	for _, o := range ops {
+	for _, o := range out.ops {
 		if o.bitmap != nil {
 			b.Bitmap(o.x, o.y, o.bitmapWidthB, o.bitmapHeight, o.bitmap)
 			continue

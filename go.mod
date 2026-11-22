@@ -9,4 +9,6 @@ require (
 	golang.org/x/sys v0.0.0-20200909081042-eff7692f9009
 )
 
-require golang.org/x/text v0.16.0 // indirect
+require golang.org/x/text v0.16.0
+
+require rsc.io/qr v0.2.0
