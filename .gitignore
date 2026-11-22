@@ -26,3 +26,6 @@
 # OS junk
 Thumbs.db
 .DS_Store
+
+# Written by agentctl when run from a dev checkout (config.go falls back to ./machine_id off Windows)
+machine_id
