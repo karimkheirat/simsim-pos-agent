@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
 	"github.com/karimkheirat/simsim-pos-agent/internal/escpos"
 )
 
@@ -156,24 +157,30 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 
 	// Head: store · document name · number · date and time · terminal ·
 	// cashier · shopper.
-	p.b.Align(escpos.Center).Bold(true)
+	p.setAlign(escpos.Center)
+	p.setBold(true)
 	for _, s := range wrap(strings.ToUpper(strings.TrimSpace(r.Store.Name)), p.width) {
+		if p.arabic(s, storeHeight) {
+			continue
+		}
 		// The LF stays outside the tall scope so the feed advances at
 		// normal height.
 		p.b.Size(1, storeHeight).TextCP858(s).Size(1, 1).Text("\n")
 	}
-	p.b.Bold(false)
+	p.setBold(false)
 	for _, s := range []string{r.Store.AddressLine1, r.Store.AddressLine2, r.Store.Phone, r.Store.TaxID} {
 		p.text(s)
 	}
-	p.b.Align(escpos.Left)
+	p.setAlign(escpos.Left)
 	p.rule()
 
-	p.b.Bold(true).CharSpacing(1)
+	p.setBold(true)
+	p.b.CharSpacing(1)
 	for _, s := range wrap(strings.ToUpper(doc.title), p.width-p.width/12) {
-		p.b.TextCP858(s + "\n")
+		p.line(s)
 	}
-	p.b.CharSpacing(0).Bold(false)
+	p.b.CharSpacing(0)
+	p.setBold(false)
 	p.text(doc.number)
 	p.text(paperDateTime(r.IssuedAt, opts.Location))
 	if p.narrow {
@@ -195,16 +202,16 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 	// then on a ticket the Code 128 with its number in clear beneath.
 	if len(doc.footer) > 0 {
 		p.rule()
-		p.b.Align(escpos.Center)
+		p.setAlign(escpos.Center)
 		for _, fl := range doc.footer {
 			p.text(fl)
 		}
-		p.b.Align(escpos.Left)
+		p.setAlign(escpos.Left)
 	}
 	if !doc.report && doc.number != "" {
-		p.b.Align(escpos.Center)
+		p.setAlign(escpos.Center)
 		p.barcode(doc.number)
-		p.b.Align(escpos.Left)
+		p.setAlign(escpos.Left)
 	}
 
 	// Final feed + cut/no-cut + optional drawer.
@@ -231,9 +238,11 @@ func Render(r Receipt, opts RenderOptions) ([]byte, error) {
 // page is one render in progress: the byte builder plus the roll's geometry.
 type page struct {
 	b      *escpos.Builder
-	width  int  // columns at body size
-	narrow bool // 58 mm reflow
-	dots   int  // printable dots across
+	bold   bool             // what the builder was last told, for Arabic rows
+	align  escpos.Alignment // likewise
+	width  int              // columns at body size
+	narrow bool             // 58 mm reflow
+	dots   int              // printable dots across
 }
 
 // text writes s wrapped to the page width, one LF per row, in whatever
@@ -243,8 +252,53 @@ func (p *page) text(s string) {
 		return
 	}
 	for _, r := range wrap(s, p.width) {
-		p.b.TextCP858(r + "\n")
+		p.line(r)
 	}
+}
+
+// line writes one laid-out row and its LF. A row holding Arabic is drawn
+// as a picture (see internal/arabic): the printer's code pages have no
+// Arabic, and the letters must be joined and laid right to left.
+func (p *page) line(s string) {
+	if p.arabic(s, 1) {
+		return
+	}
+	p.b.TextCP858(s + "\n")
+}
+
+// arabic draws s as a raster row at the given size when it holds Arabic,
+// and reports whether it did. On a drawing error it returns false and the
+// row prints as text (Arabic letters as "?"), as before.
+func (p *page) arabic(s string, scale int) bool {
+	if !arabic.HasArabic(s) {
+		return false
+	}
+	al := arabic.Left
+	switch p.align {
+	case escpos.Center:
+		al = arabic.Center
+	case escpos.Right:
+		al = arabic.Right
+	}
+	img, err := arabic.Row(s, arabic.Style{Bold: p.bold, Scale: scale, Align: al, Dots: p.dots})
+	if err != nil {
+		return false
+	}
+	// The image is the full width; justification would only shift it.
+	p.b.Align(escpos.Left)
+	p.b.Write(img)
+	p.b.Align(p.align)
+	return true
+}
+
+func (p *page) setBold(on bool) {
+	p.bold = on
+	p.b.Bold(on)
+}
+
+func (p *page) setAlign(a escpos.Alignment) {
+	p.align = a
+	p.b.Align(a)
 }
 
 // rule is a dashed full-width divider.
@@ -255,7 +309,7 @@ func (p *page) rule() {
 // row writes label left and value right.
 func (p *page) row(label, value string) {
 	for _, r := range row(label, value, p.width) {
-		p.b.TextCP858(r + "\n")
+		p.line(r)
 	}
 }
 
@@ -271,10 +325,10 @@ func (p *page) ticketBody(r Receipt, words Labels, cur string) {
 			// below.
 			p.text(l.Name)
 			if runeLen(detail)+2+runeLen(amount) <= p.width {
-				p.b.TextCP858(padBetween(detail, amount, p.width) + "\n")
+				p.line(padBetween(detail, amount, p.width))
 			} else {
 				p.text(detail)
-				p.b.TextCP858(rightAlign(amount, p.width) + "\n")
+				p.line(rightAlign(amount, p.width))
 			}
 		} else {
 			p.row(l.Name, amount)
@@ -317,13 +371,20 @@ func (p *page) ticketBody(r Receipt, words Labels, cur string) {
 
 // total prints the TOTAL row at the largest size that fits the roll.
 func (p *page) total(label, amount string) {
-	p.b.Bold(true)
+	p.setBold(true)
+	if arabic.HasArabic(label) {
+		p.arabic(padBetween(label, amount, p.width), totalScale)
+		p.setBold(false)
+		return
+	}
 	if cols := p.width / totalScale; runeLen(label)+1+runeLen(amount) <= cols {
 		p.b.Size(totalScale, totalScale).TextCP858(padBetween(label, amount, cols))
 	} else {
 		p.b.Size(1, totalScale).TextCP858(padBetween(label, amount, p.width))
 	}
-	p.b.Size(1, 1).Bold(false).Text("\n")
+	p.b.Size(1, 1)
+	p.setBold(false)
+	p.b.Text("\n")
 }
 
 // reportRows prints the rapport's rows as sent, in order — the CAISSE rows
@@ -336,9 +397,9 @@ func (p *page) reportRows(lines []Line, cur string) {
 			if i > 0 {
 				p.rule()
 			}
-			p.b.Bold(true)
+			p.setBold(true)
 			p.text(s)
-			p.b.Bold(false)
+			p.setBold(false)
 			section = s
 		}
 		// An unmarked row prints a bare number: the current wire does not
@@ -348,11 +409,11 @@ func (p *page) reportRows(lines []Line, cur string) {
 			value = paperMoney(l.LineTotal, cur)
 		}
 		if l.Bold {
-			p.b.Bold(true)
+			p.setBold(true)
 		}
 		p.row(l.Name, value)
 		if l.Bold {
-			p.b.Bold(false)
+			p.setBold(false)
 		}
 	}
 }
