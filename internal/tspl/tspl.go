@@ -113,6 +113,19 @@ func quoted(s string) string {
 
 // ── Standalone command builders (each returns a single CRLF-terminated line) ──
 
+// Bitmap returns the BITMAP command (mode 0, overwrite) drawing data at
+// x,y: widthBytes bytes a row, height rows, a 0 bit printing black.
+func Bitmap(x, y, widthBytes, height int, data []byte) []byte {
+	out := []byte(fmt.Sprintf("BITMAP %d,%d,%d,%d,0,", x, y, widthBytes, height))
+	out = append(out, data...)
+	return append(out, crlf...)
+}
+
+// Bitmap appends a BITMAP command.
+func (b *Builder) Bitmap(x, y, widthBytes, height int, data []byte) *Builder {
+	return b.Write(Bitmap(x, y, widthBytes, height, data))
+}
+
 // CLS returns the CLS command — clear the image buffer. Always issued
 // at the start of a label to reset any state left from a previous job.
 func CLS() []byte {

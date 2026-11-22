@@ -1,6 +1,7 @@
 package receipt
 
 import (
+	"github.com/karimkheirat/simsim-pos-agent/internal/arabic"
 	"math"
 	"strings"
 
@@ -131,6 +132,12 @@ type tsplOp struct {
 	x, y, xMul, yMul int
 	s                string
 	cp               bool // transcode UTF-8 → CP1252 (French text)
+
+	// bitmap, when set, replaces the text: a row holding Arabic drawn as
+	// a picture (internal/arabic), since TSPL fonts carry no Arabic.
+	bitmap       []byte
+	bitmapWidthB int
+	bitmapHeight int
 }
 
 // RenderTSPL serializes a Receipt to a TSPL2 byte stream for TSPL-only
@@ -158,6 +165,18 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 	// row starts at x=0 (the monospace column block, byte-identical to
 	// the ESC/POS formatLine output). cp=true transcodes French text.
 	emit := func(s string, xMul, yMul int, centered, cp bool) {
+		if arabic.HasArabic(s) {
+			al := arabic.Left
+			if centered {
+				al = arabic.Center
+			}
+			if img, err := arabic.RowImage(s, arabic.Style{Scale: yMul, Align: al, Dots: opts.WidthDots, CellW: cell.w * xMul}); err == nil {
+				data, wb, h := arabic.TSPLBitmap(img)
+				ops = append(ops, tsplOp{x: 0, y: y, bitmap: data, bitmapWidthB: wb, bitmapHeight: h})
+				y += h + tsplLineGapDots
+				return
+			}
+		}
 		x := 0
 		if centered {
 			textDots := len([]rune(s)) * cell.w * xMul
@@ -274,6 +293,10 @@ func RenderTSPL(r Receipt, opts TSPLReceiptOptions) ([]byte, error) {
 		Codepage("1252")
 
 	for _, o := range ops {
+		if o.bitmap != nil {
+			b.Bitmap(o.x, o.y, o.bitmapWidthB, o.bitmapHeight, o.bitmap)
+			continue
+		}
 		if o.cp {
 			b.TextCP1252(o.x, o.y, opts.Font, 0, o.xMul, o.yMul, o.s)
 		} else {
