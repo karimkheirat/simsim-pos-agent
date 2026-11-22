@@ -140,6 +140,12 @@ func (l *Loop) buildHeartbeat() cloud.HeartbeatRequest {
 			Name:       l.Printer.Name(),
 			LastError:  nil, // M3: wire real error tracking.
 		}
+		if sr, ok := l.Printer.(printer.StatusReader); ok {
+			ps.Direct = true
+			if st := sr.Status(); st.Known {
+				ps.DeviceState = &st
+			}
+		}
 	}
 	return cloud.HeartbeatRequest{
 		AgentVersion:  l.Version,

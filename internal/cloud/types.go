@@ -1,5 +1,7 @@
 package cloud
 
+import "github.com/karimkheirat/simsim-pos-agent/internal/printer"
+
 // PairResponse is the decoded payload of POST /api/pos-agent/pair on success.
 // Contract §4.2 — the terminal_token is shown by the cloud only here.
 type PairResponse struct {
@@ -26,6 +28,13 @@ type PrinterStatus struct {
 	Reachable  bool    `json:"reachable"`
 	Name       string  `json:"name"`
 	LastError  *string `json:"last_error"`
+	// Direct and DeviceState (ISSUE-115): a USB printer the agent drives
+	// itself, and what it last said about its paper, cover and online
+	// state. Omitted for a Windows queue, which cannot answer. The cloud
+	// stores the printer object as sent (passthrough), so the back office
+	// can show it from any computer.
+	Direct      bool            `json:"direct,omitempty"`
+	DeviceState *printer.Status `json:"status,omitempty"`
 }
 
 // pairRequest is the wire body for POST /api/pos-agent/pair. Internal to

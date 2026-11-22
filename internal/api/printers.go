@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/karimkheirat/simsim-pos-agent/internal/printer"
 )
 
 // printersResponse is GET /printers: the printers Windows knows (virtual ones
@@ -54,18 +56,18 @@ func (s *Server) handleChoosePrinter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, CodePrinterListUnavailable, err.Error())
 		return
 	}
-	known := false
-	for _, p := range list {
-		if p.Name == req.Name {
-			known = true
+	var picked *printer.Installed
+	for i := range list {
+		if list[i].Name == req.Name {
+			picked = &list[i]
 			break
 		}
 	}
-	if !known {
+	if picked == nil {
 		writeError(w, http.StatusBadRequest, CodePrinterUnknown, "not a printer Windows lists")
 		return
 	}
-	if err := s.cfg.ChooseReceiptPrinter(req.Name); err != nil {
+	if err := s.cfg.ChooseReceiptPrinter(picked.SpecOrName(), picked.Language); err != nil {
 		writeError(w, http.StatusInternalServerError, CodeInternal, err.Error())
 		return
 	}
